@@ -71,6 +71,8 @@ FlashInfer gates fp8 MLA KV to SM90, and naively relaxing the gate fails with CU
 
 As far as we can tell this is the first fp8 KV cache for a NoPE-MLA model on any consumer Blackwell part (GB10 or RTX PRO 6000 SM120 — see `docs/issue-flashinfer-fp8-mla-sm121.md` and `docs/issue-vllm-nope-fp8-ds-mla.md`, upstream-ready issue drafts with the receipts).
 
+See also [docs/GB10-KV-MEMORY-LADDER.md](docs/GB10-KV-MEMORY-LADDER.md) — the six-boot study of why KV budgets above vLLM's suggested number die on GB10, with the cache-flusher mitigation ([cache_flusher.sh](cache_flusher.sh)) and the driver-level mechanism.
+
 Phase-3 option (documented, not built): a ~40-line "zero-pad rope" shim would route NoPE models onto the Blackwell-native trtllm packed-fp8 decode kernel — faster decode, needs one FlashInfer kernel re-instantiation for GLM's 2176-wide kpool index buffer.
 
 ## Debugging kit (reusable for any day-0 model on new silicon)
