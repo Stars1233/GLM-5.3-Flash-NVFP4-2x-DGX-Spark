@@ -6,15 +6,15 @@ As far as we can tell this was the first working GLM-5.3-Flash deployment on DGX
 
 ## Results
 
-| Metric | Day-1 (no MTP) |
-|---|---|
-| TTFT (median, 3 runs) | 0.239 s |
-| Decode | ~14.3 tok/s |
-| Context | 262,144 tokens |
-| KV pool | 7.19 GiB bf16 = 603,144 tokens (2.3x concurrent full-context) |
-| Boot time | ~14 min (~25 with MTP draft head) |
+| Metric | bf16 baseline (v7) | **fp8 KV + MTP-4 (v8, flagship)** |
+|---|---|---|
+| TTFT (median, 3 runs) | 0.239 s | 0.289 s |
+| Decode | 14.3 tok/s | **21.8 tok/s (+52%)** |
+| Context | 262,144 | 262,144 |
+| KV pool | 603,144 tokens (2.3x full-context) | **507,041 tokens with the MTP draft head resident** (1.93x; bf16+MTP only managed 276K) |
+| Boot time | ~14 min | ~21 min (draft head reloads the checkpoint) |
 
-MTP speculative decode (`{"method":"mtp","num_speculative_tokens":4}`) is the phase-2 speed lift — the checkpoint ships a native MTP head.
+MTP metrics under real traffic: mean acceptance length 2.5–2.9, per-position acceptance ~[0.74, 0.47, 0.27, 0.15] — position 4 is nearly free-riding, so `num_speculative_tokens=3` is a candidate micro-tune.
 
 ## Why this needs a patched image
 
@@ -25,6 +25,7 @@ The vLLM PR authors' day-0 image (`vllm/vllm-openai:glm53-flash-arm64-cu130`) wo
 3. **The nightly's dependency sabotage** — installing it silently downgrades `nvidia-nccl-cu13` to 2.29.7 (NCCL "internal error" on the Spark IB fabric; re-pin **2.30.7**) and skews `nvidia-cutlass-dsl` to a mixed 4.7.0/4.6.2 install (CuTeDSL warmup ICE; re-pin **4.6.2**). Audit transitive pins after ANY pip install in these images.
 4. **PDL on unvalidated silicon** — vLLM enables Programmatic Dependent Launch for capability ≥ 9, including SM121, in the Triton kernels carrying KDA recurrent state. Gated off on SM12x.
 5. **Indexer uninitialized top-k** — the kpool top-k destination was `torch.empty` and the kernels only guarantee the first `min(k, valid)` entries; short rows carried garbage pool ids → bogus token indices → attention gathers uninitialized KV → NaN lottery. Fix: init to `-1` + clamp expanded pool ids (`docker/patch_v7.py`).
+6. **fp8 KV cache unlock** (v8, `docker/patch_v8_fp8.py`) — see the fp8 section below. Also learned the hard way: MTP's draft head (+~5GB) at gmu 0.85 trips GB10 unified-memory OOM (`NV_ERR_NO_MEMORY` in dmesg, death on first request) — pin the budget with `--kv-cache-memory` (vLLM prints the safe number in its startup log) instead of riding the gmu edge.
 
 Two serve-flag landmines (no code needed):
 - `--block-size 2304` — vLLM's hybrid block aligner picks a size whose kpool storage tiles by 32, but DeepGEMM's arch-12 fp8 paged-MQA accepts only 64-entry pool pages. 2304 is a multiple of kpool·64 and of the MLA 128 alignment.
@@ -64,9 +65,13 @@ curl http://<head>:8000/v1/chat/completions -H 'Content-Type: application/json' 
 - Two consecutive unexplained deaths = stop and diagnose, never crash-loop.
 - `max_tokens` includes reasoning tokens when thinking is on; pass `chat_template_kwargs: {"enable_thinking": false}` per-request to disable.
 
-## fp8 KV cache: not yet possible on GB10
+## fp8 KV cache on GB10: a world first, and it's a two-line fix
 
-We tried. FlashInfer's fa2 fp8-MLA dequant kernel is genuinely Hopper-only (relaxing the SM90 gate → CUDA "invalid argument" at launch: `probes/probe_fa2_fp8.py`), and the Blackwell-native trtllm path's packed layout has no NoPE variant. Until upstream adds either, bf16 KV it is — 603K tokens is still 2.3x concurrent 262K requests.
+FlashInfer gates fp8 MLA KV to SM90, and naively relaxing the gate fails with CUDA "invalid argument" (`probes/probe_fa2_fp8.py`). The actual root cause (`docker/patch_v8_fp8.py`): the fa2 fp8 branch **forces CTA_TILE_KV=32 — a Hopper 228KB-smem assumption**. On GB10's ~101KB opt-in max that doubles the tile picked for this device and over-requests shared memory (117,312B > 101,376B) at `cudaFuncSetAttribute`, before the kernel ever launches. **Capping the tile instead of forcing it** (fp8 keeps TKV=16 on 100KB-class devices — 91,680B, fits) plus the gate relax makes fp8 KV work: verified on-GPU with all batch shapes clean and rel-err ~0.005 vs an fp32 reference (normal fp8 quantization noise), then validated end-to-end serving GLM-5.3 with MTP.
+
+As far as we can tell this is the first fp8 KV cache for a NoPE-MLA model on any consumer Blackwell part (GB10 or RTX PRO 6000 SM120 — see `docs/issue-flashinfer-fp8-mla-sm121.md` and `docs/issue-vllm-nope-fp8-ds-mla.md`, upstream-ready issue drafts with the receipts).
+
+Phase-3 option (documented, not built): a ~40-line "zero-pad rope" shim would route NoPE models onto the Blackwell-native trtllm packed-fp8 decode kernel — faster decode, needs one FlashInfer kernel re-instantiation for GLM's 2176-wide kpool index buffer.
 
 ## Debugging kit (reusable for any day-0 model on new silicon)
 

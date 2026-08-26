@@ -8,7 +8,7 @@ set -euo pipefail
 NODE_RANK="${1:?usage: launch-glm53-vllm-tp2.sh <0|1>}"
 [[ "$NODE_RANK" == "0" || "$NODE_RANK" == "1" ]] || { echo "rank must be 0 or 1" >&2; exit 2; }
 
-IMAGE="radixark/vllm-glm53-flash:sm121-v7"
+IMAGE="radixark/vllm-glm53-flash:sm121-v8"
 NAME="vllm_glm53"
 MODEL_HOST_PATH="/var/tmp/glm-5.3-flash-nvfp4"
 MODEL_PATH="/models/glm-5.3-flash-nvfp4"
@@ -57,7 +57,7 @@ docker run --gpus all -d \
     --tensor-parallel-size 2 \
     --gpu-memory-utilization 0.85 \
     --max-model-len 262144 \
-    --max-num-seqs 6 --block-size 2304 --moe-backend marlin --speculative-config '{"method":"mtp","num_speculative_tokens":4}' \
+    --max-num-seqs 6 --block-size 2304 --moe-backend marlin --speculative-config '{"method":"mtp","num_speculative_tokens":4}' --kv-cache-dtype fp8_e4m3 --kv-cache-memory 4445787956 \
     --enforce-eager \
     --tool-call-parser glm47 --enable-auto-tool-choice \
     --reasoning-parser glm45 \

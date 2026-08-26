@@ -147,3 +147,32 @@ DS4: DOWN everywhere (standing order: no restore). Both new models serving simul
 - Model: zai-org/GLM-5.3-Flash. Quant: LibertAIDAI/GLM-5.3-Flash-NVFP4 (whose card's sm_121 marlin fallback note and serve flags were used directly).
 - **barrydeen** (glm53-flash-dgx-spark): the gmu 0.85 + 131K reference config and the quantization-coverage table. Used with credit per Tony's directive.
 - vLLM PR #53906 authors for the day-0 image; FlashInfer for the 0.6.18 SM90-NoPE MLA path.
+
+---
+
+# Addendum: Phase 2 — fp8 KV cache + MTP-4 (same day, 2026-08-26 evening)
+
+Final flagship config SERVING at 21:21 UTC: image **radixark/vllm-glm53-flash:sm121-v8**, serve args add
+`--kv-cache-dtype fp8_e4m3 --kv-cache-memory 4445787956 --speculative-config '{"method":"mtp","num_speculative_tokens":4}'`.
+
+## What happened between v7 and v8
+
+1. **MTP-4 alone (bf16 KV) died on its first request.** Boot succeeded, served, then rank 0 was killed with no Python traceback. dmesg: `NV_ERR_NO_MEMORY` — the GB10 unified-memory OOM the fleet doctrine warns about. The draft head adds ~5 GB of weights; gmu 0.85 left no slack (vLLM's own startup log said usage exceeded the requested budget and suggested the exact `--kv-cache-memory` values). KV with bf16+MTP was down to 275,941 tokens (1.05x at 262K).
+2. **fp8 KV turned out to be a two-line fix, not a Hopper exclusive.** FlashInfer's "FP8 kv_data_type requires SM90" guard hides a smem over-request: the fa2 fp8 branch forces CTA_TILE_KV=32 (written for Hopper's 228 KB smem); on GB10 that doubles the DISPATCH_SMEM_CONFIG tile and asks cudaFuncSetAttribute for 117,312 B against a 101,376 B opt-in max → cudaErrorInvalidValue. Fix (mla.cuh): cap `EFF_CTA_TILE_KV = min(CTA_TILE_KV, 32)` — fp8 gets TKV=16 on 100 KB devices (91,680 B, fits; 190 regs, 0 spills; grid = num_sm cooperative launch unchanged) — plus the `_core.py` gate accepting major 12. Verified standalone on the GPU: all batch shapes clean, rel-err 0.0054 vs fp32 reference. To our knowledge the first fp8 KV for a NoPE-MLA model on any consumer Blackwell device.
+3. The two fixes are complementary: fp8 halves KV bytes, relieving exactly the memory pressure that killed the MTP boot; the pinned `--kv-cache-memory` removes the gmu edge-riding permanently.
+
+## Final benchmarks (3 streaming runs, 200 tokens, temp 0, thinking off)
+
+| Config | TTFT (median) | Decode (median) | Peak | KV tokens | Concurrency @262K |
+|---|---:|---:|---:|---:|---:|
+| v7 bf16, no MTP | 0.239 s | 14.30 tok/s | 14.53 | 603,144 | 2.30x |
+| bf16 + MTP-4 | — | died (OOM) | — | 275,941 | 1.05x |
+| **v8 fp8 + MTP-4** | **0.289 s** | **21.77 tok/s** | **22.69** | **507,041** | **1.93x** |
+
++52% decode over baseline. fp8 stores ~2x tokens per GiB (507K from a 4.14 GiB pinned budget vs 603K from 7.19 GiB bf16).
+
+MTP metrics under real traffic: mean acceptance length 2.5–2.9; per-position acceptance ≈ [0.74, 0.47, 0.27, 0.15]; avg draft acceptance 37–47%. Position 4 is nearly free-riding → `num_speculative_tokens=3` is a candidate micro-tune. Raising `--kv-cache-memory` toward the ~10.7 GiB vLLM reports available would put fp8 KV near 1M tokens with MTP resident (untested; do as a controlled change — the OOM line on GB10 is real).
+
+## Validation on the final config
+
+Coherent greedy output, correct identity, structured tool calls (`glm47` parser, `finish_reason: tool_calls`), finite logprobs, no NaN. Thinking is ON by default (`glm45` parser separates it); disable per-request with `chat_template_kwargs: {"enable_thinking": false}` or bake `--default-chat-template-kwargs` at launch.
