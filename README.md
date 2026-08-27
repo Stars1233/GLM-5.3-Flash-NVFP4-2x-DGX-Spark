@@ -15,7 +15,9 @@ As far as we can tell this was the first working GLM-5.3-Flash deployment on DGX
 | Nodes | 2 | 2 | 4 (`launch-glm53-vllm-tp4.sh`) |
 | Boot time | ~14 min | ~21 min | **~12 min** (quarter weights/rank load faster) |
 
-TP4 also dissolves the GB10 KV-allocation ceiling documented in the memory-ladder study: at ~50 GiB weights per rank the 9 GiB KV slab allocates with ~60 GiB of slack � the 1M+ token pool that TP2 physically could not hold.
+TP4 also dissolves the GB10 KV-allocation ceiling documented in the memory-ladder study: at ~50 GiB weights per rank the 9 GiB KV slab allocates with ~60 GiB of slack — the 1M+ token pool that TP2 physically could not hold.
+
+**TP2 KV update (2026-08-27):** with LOCAL weights on both ranks (no NFS duty) plus an aggressive cache-flush ritual, TP2 holds **672,606 fp8 KV tokens** (`--kv-cache-memory 5905580032`), stress-verified — a +33% jump over the 507K figure above, which remains the ceiling when one rank doubles as the NFS server. 6 GiB+/rank reservations "succeed" then die on first touch in warmup (phantom backing). The 8-attempt hunt, the first-touch failure signature, and every lever that did NOT work are in [docs/KV-HUNT-672K-TP2-RECORD.md](docs/KV-HUNT-672K-TP2-RECORD.md).
 
 MTP metrics under real traffic: mean acceptance length 2.5–2.9, per-position acceptance ~[0.74, 0.47, 0.27, 0.15] — position 4 is nearly free-riding, so `num_speculative_tokens=3` is a candidate micro-tune.
 
