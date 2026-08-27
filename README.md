@@ -6,13 +6,16 @@ As far as we can tell this was the first working GLM-5.3-Flash deployment on DGX
 
 ## Results
 
-| Metric | bf16 baseline (v7) | **fp8 KV + MTP-4 (v8, flagship)** |
-|---|---|---|
-| TTFT (median, 3 runs) | 0.239 s | 0.289 s |
-| Decode | 14.3 tok/s | **21.8 tok/s (+52%)** |
-| Context | 262,144 | 262,144 |
-| KV pool | 603,144 tokens (2.3x full-context) | **507,041 tokens with the MTP draft head resident** (1.93x; bf16+MTP only managed 276K) |
-| Boot time | ~14 min | ~21 min (draft head reloads the checkpoint) |
+| Metric | bf16 TP2 (v7) | fp8+MTP-4 TP2 (v8) | **fp8+MTP-4 TP4 (v8, flagship)** |
+|---|---|---|---|
+| TTFT (median, 3 runs) | 0.239 s | 0.289 s | **0.204 s** |
+| Decode | 14.3 tok/s | 21.8 tok/s | **35.7 tok/s (peak 36.8)** |
+| Context | 262,144 | 262,144 | 262,144 |
+| KV pool | 603,144 tokens | 507,041 tokens | **1,263,415 tokens (4.82x full-context)** |
+| Nodes | 2 | 2 | 4 (`launch-glm53-vllm-tp4.sh`) |
+| Boot time | ~14 min | ~21 min | **~12 min** (quarter weights/rank load faster) |
+
+TP4 also dissolves the GB10 KV-allocation ceiling documented in the memory-ladder study: at ~50 GiB weights per rank the 9 GiB KV slab allocates with ~60 GiB of slack � the 1M+ token pool that TP2 physically could not hold.
 
 MTP metrics under real traffic: mean acceptance length 2.5–2.9, per-position acceptance ~[0.74, 0.47, 0.27, 0.15] — position 4 is nearly free-riding, so `num_speculative_tokens=3` is a candidate micro-tune.
 
