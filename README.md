@@ -11,13 +11,13 @@ As far as we can tell this was the first working GLM-5.3-Flash deployment on DGX
 | TTFT (median, 3 runs) | 0.239 s | 0.289 s | **0.204 s** |
 | Decode | 14.3 tok/s | 21.8 tok/s | **35.7 tok/s (peak 36.8)** |
 | Context | 262,144 | 262,144 | **up to 1,048,576 (model-native 1M)** |
-| KV pool | 603,144 tokens | 672,606 tokens (local weights) | **3,774,873 tokens (3.6x full 1M context, concurrency-gated)** |
+| KV pool | 603,144 tokens | 672,606 tokens (local weights) | **2,516,582 tokens (2.4x full 1M context, forensics-gated)** |
 | Nodes | 2 | 2 | 4 (`launch-glm53-vllm-tp4.sh`) |
 | Boot time | ~14 min | ~21 min | **~12 min** (quarter weights/rank load faster) |
 
 TP4 also dissolves the GB10 KV-allocation ceiling documented in the memory-ladder study: at ~50 GiB weights per rank the 9 GiB KV slab allocates with ~60 GiB of slack — the 1M+ token pool that TP2 physically could not hold.
 
-**5M KV / 1M context on TP4 (2026-08-27, stress-gated):** the shipped TP4 config is now **24 GiB KV per rank = 3,774,873 fp8 tokens**, found by the residual-headroom rule: grow the KV slab until ~8-10 GB stays available per node. 38 GiB (5.97M tokens) allocates and even answers short prompts, then the first 20K-token prefill's activation transient NVRM-OOMs the engine — "serving" is not the bar, surviving a long prefill is. Gate every KV bump behind CONCURRENT prefills: 32 GiB passed a single-prefill gate, then died under three overlapping requests from real traffic (the head rank also carries the API server + NFS duty). 24 GiB survives 3x simultaneous 20K prefills with ~18 GB residual on the head.
+**5M KV / 1M context on TP4 (2026-08-27, stress-gated):** the shipped TP4 config is now **16 GiB KV per rank = 2,516,582 fp8 tokens** (see docs/SM121-CRASH-FORENSICS-2026-08-27.md for why bigger pools fail), found by the residual-headroom rule: grow the KV slab until ~8-10 GB stays available per node. 38 GiB (5.97M tokens) allocates and even answers short prompts, then the first 20K-token prefill's activation transient NVRM-OOMs the engine — "serving" is not the bar, surviving a long prefill is. Gate every KV bump behind CONCURRENT prefills: 32 GiB passed a single-prefill gate, then died under three overlapping requests from real traffic (the head rank also carries the API server + NFS duty). 24 GiB survives 3x simultaneous 20K prefills with ~18 GB residual on the head.
 
 **1M context on TP4:** GLM-5.3-Flash ships `max_position_embeddings = 1,048,576`, and the TP4 KV pool (3,774,873 tokens) holds 3.6 full-length requests, so `--max-model-len 1048576` is within both the model's and the pool's limits — no rope scaling, no overrides. The launcher now defaults to 1M. Practical notes: a full 1M-token prefill takes many minutes of wall clock before the first output token, and concurrency at full depth is ~1.2 requests; cap `--max-model-len` lower (e.g. 300000) when you want a snappier multi-user endpoint.
 
