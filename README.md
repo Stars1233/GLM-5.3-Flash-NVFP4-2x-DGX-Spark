@@ -90,6 +90,18 @@ Phase-3 option (documented, not built): a ~40-line "zero-pad rope" shim would ro
 - The deploy report describes the env-gated forward-hook NaN localizer (`GLM53_NAN_DEBUG=1` build) that names the first module emitting non-finite values — how we localized both NaN sources.
 - `probes/bench_glm53.py` — 3-run TTFT/decode benchmark.
 
+## vLLM v0.28.0 status (checked 2026-08-27)
+
+**Not viable for GLM-5.3 yet**: the `glm5_next` architecture is NOT in the v0.28.0 release
+(PR vllm-project/vllm#53906 still open/unmerged at check time), and no rebased day-0 image
+exists (all `vllm/vllm-openai:glm53-flash*` tags still date to the original 2026-08-26 push).
+The day-0 image used here is itself a main-branch dev snapshot (`0.1.dev20051`) cut around
+the 0.28 branch point -- i.e. this stack already runs 0.28-era engine code plus the GLM
+support 0.28 lacks. Upgrade path when it opens: watch the PR and the Docker Hub tags; the
+patch stack here is guarded string-patches that apply-or-refuse loudly, so porting to a new
+base is mechanical (apply v1->v10 in order, fix whichever guards fire, ladder through the
+experiment lane before production).
+
 ## Credits
 
 - Model: [zai-org/GLM-5.3-Flash](https://huggingface.co/zai-org/GLM-5.3-Flash) · Quant: [LibertAIDAI/GLM-5.3-Flash-NVFP4](https://huggingface.co/LibertAIDAI/GLM-5.3-Flash-NVFP4) (their sm_121 notes were used directly)
