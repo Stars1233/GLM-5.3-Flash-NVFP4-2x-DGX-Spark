@@ -1,6 +1,6 @@
 # GLM-5.3-Flash on 2x NVIDIA DGX Spark
 
-Serving [zai-org/GLM-5.3-Flash](https://huggingface.co/zai-org/GLM-5.3-Flash) (320B total / 18B active MoE, released 2026-08-26) across two DGX Spark (GB10, SM121) nodes at tensor-parallel 2, using the [LibertAIDAI/GLM-5.3-Flash-NVFP4](https://huggingface.co/LibertAIDAI/GLM-5.3-Flash-NVFP4) weight-only NVFP4 quant. **262,144-token context on TP2 — and the model-native 1,048,576 (1M) on TP4, whose 5M-token KV pool holds 4.8 full 1M-token requests. Working, benchmarked, same-day as the model drop.**
+Serving [zai-org/GLM-5.3-Flash](https://huggingface.co/zai-org/GLM-5.3-Flash) (320B total / 18B active MoE, released 2026-08-26) across two DGX Spark (GB10, SM121) nodes at tensor-parallel 2, using the [LibertAIDAI/GLM-5.3-Flash-NVFP4](https://huggingface.co/LibertAIDAI/GLM-5.3-Flash-NVFP4) weight-only NVFP4 quant. **262,144-token context on TP2 — and the model-native 1,048,576 (1M) on TP4, whose 3.77M-token KV pool holds 3.6 full 1M-token requests. Working, benchmarked, same-day as the model drop.**
 
 As far as we can tell this was the first working GLM-5.3-Flash deployment on DGX Spark hardware. Getting there took fixing **seven distinct day-0 bugs** across vLLM, FlashInfer, and their dependency chain — every one is documented in [docs/DEPLOY-REPORT.md](docs/DEPLOY-REPORT.md) with root causes, receipts, and the probe scripts that found them.
 
@@ -11,15 +11,15 @@ As far as we can tell this was the first working GLM-5.3-Flash deployment on DGX
 | TTFT (median, 3 runs) | 0.239 s | 0.289 s | **0.204 s** |
 | Decode | 14.3 tok/s | 21.8 tok/s | **35.7 tok/s (peak 36.8)** |
 | Context | 262,144 | 262,144 | **up to 1,048,576 (model-native 1M)** |
-| KV pool | 603,144 tokens | 672,606 tokens (local weights) | **5,033,164 tokens (4.8x full 1M context)** |
+| KV pool | 603,144 tokens | 672,606 tokens (local weights) | **3,774,873 tokens (3.6x full 1M context, concurrency-gated)** |
 | Nodes | 2 | 2 | 4 (`launch-glm53-vllm-tp4.sh`) |
 | Boot time | ~14 min | ~21 min | **~12 min** (quarter weights/rank load faster) |
 
 TP4 also dissolves the GB10 KV-allocation ceiling documented in the memory-ladder study: at ~50 GiB weights per rank the 9 GiB KV slab allocates with ~60 GiB of slack — the 1M+ token pool that TP2 physically could not hold.
 
-**5M KV / 1M context on TP4 (2026-08-27, stress-gated):** the shipped TP4 config is now **32 GiB KV per rank = 5,033,164 fp8 tokens**, found by the residual-headroom rule: grow the KV slab until ~8-10 GB stays available per node. 38 GiB (5.97M tokens) allocates and even answers short prompts, then the first 20K-token prefill's activation transient NVRM-OOMs the engine — "serving" is not the bar, surviving a long prefill is. Gate every KV bump behind a real prefill.
+**5M KV / 1M context on TP4 (2026-08-27, stress-gated):** the shipped TP4 config is now **24 GiB KV per rank = 3,774,873 fp8 tokens**, found by the residual-headroom rule: grow the KV slab until ~8-10 GB stays available per node. 38 GiB (5.97M tokens) allocates and even answers short prompts, then the first 20K-token prefill's activation transient NVRM-OOMs the engine — "serving" is not the bar, surviving a long prefill is. Gate every KV bump behind CONCURRENT prefills: 32 GiB passed a single-prefill gate, then died under three overlapping requests from real traffic (the head rank also carries the API server + NFS duty). 24 GiB survives 3x simultaneous 20K prefills with ~18 GB residual on the head.
 
-**1M context on TP4:** GLM-5.3-Flash ships `max_position_embeddings = 1,048,576`, and the TP4 KV pool (5,033,164 tokens) holds 4.8 full-length requests, so `--max-model-len 1048576` is within both the model's and the pool's limits — no rope scaling, no overrides. The launcher now defaults to 1M. Practical notes: a full 1M-token prefill takes many minutes of wall clock before the first output token, and concurrency at full depth is ~1.2 requests; cap `--max-model-len` lower (e.g. 300000) when you want a snappier multi-user endpoint.
+**1M context on TP4:** GLM-5.3-Flash ships `max_position_embeddings = 1,048,576`, and the TP4 KV pool (3,774,873 tokens) holds 3.6 full-length requests, so `--max-model-len 1048576` is within both the model's and the pool's limits — no rope scaling, no overrides. The launcher now defaults to 1M. Practical notes: a full 1M-token prefill takes many minutes of wall clock before the first output token, and concurrency at full depth is ~1.2 requests; cap `--max-model-len` lower (e.g. 300000) when you want a snappier multi-user endpoint.
 
 **TP2 KV update (2026-08-27):** with LOCAL weights on both ranks (no NFS duty) plus an aggressive cache-flush ritual, TP2 holds **672,606 fp8 KV tokens** (`--kv-cache-memory 5905580032`), stress-verified — a +33% jump over the 507,041-token NFS-bound ceiling (which still applies when one rank doubles as the NFS server). The Results table above now reflects this local-weights number. 6 GiB+/rank reservations "succeed" then die on first touch in warmup (phantom backing). The 8-attempt hunt, the first-touch failure signature, and every lever that did NOT work are in [docs/KV-HUNT-672K-TP2-RECORD.md](docs/KV-HUNT-672K-TP2-RECORD.md).
 
