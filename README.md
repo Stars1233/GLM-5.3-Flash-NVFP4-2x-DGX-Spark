@@ -11,7 +11,7 @@ As far as we can tell this was the first working GLM-5.3-Flash deployment on DGX
 | TTFT (median, 3 runs) | 0.239 s | 0.289 s | **0.204 s** |
 | Decode | 14.3 tok/s | 21.8 tok/s | **35.7 tok/s (peak 36.8)** |
 | Context | 262,144 | 262,144 | **up to 1,048,576 (model-native 1M)** |
-| KV pool | 603,144 tokens | 507,041 tokens | **1,263,415 tokens (4.82x full-context)** |
+| KV pool | 603,144 tokens | 672,606 tokens (local weights) | **1,263,415 tokens (4.82x full-context)** |
 | Nodes | 2 | 2 | 4 (`launch-glm53-vllm-tp4.sh`) |
 | Boot time | ~14 min | ~21 min | **~12 min** (quarter weights/rank load faster) |
 
@@ -19,7 +19,7 @@ TP4 also dissolves the GB10 KV-allocation ceiling documented in the memory-ladde
 
 **1M context on TP4:** GLM-5.3-Flash ships `max_position_embeddings = 1,048,576`, and the TP4 KV pool (1,263,415 tokens) exceeds one full-length request, so `--max-model-len 1048576` is within both the model's and the pool's limits — no rope scaling, no overrides. The launcher now defaults to 1M. Practical notes: a full 1M-token prefill takes many minutes of wall clock before the first output token, and concurrency at full depth is ~1.2 requests; cap `--max-model-len` lower (e.g. 300000) when you want a snappier multi-user endpoint.
 
-**TP2 KV update (2026-08-27):** with LOCAL weights on both ranks (no NFS duty) plus an aggressive cache-flush ritual, TP2 holds **672,606 fp8 KV tokens** (`--kv-cache-memory 5905580032`), stress-verified — a +33% jump over the 507K figure above, which remains the ceiling when one rank doubles as the NFS server. 6 GiB+/rank reservations "succeed" then die on first touch in warmup (phantom backing). The 8-attempt hunt, the first-touch failure signature, and every lever that did NOT work are in [docs/KV-HUNT-672K-TP2-RECORD.md](docs/KV-HUNT-672K-TP2-RECORD.md).
+**TP2 KV update (2026-08-27):** with LOCAL weights on both ranks (no NFS duty) plus an aggressive cache-flush ritual, TP2 holds **672,606 fp8 KV tokens** (`--kv-cache-memory 5905580032`), stress-verified — a +33% jump over the 507,041-token NFS-bound ceiling (which still applies when one rank doubles as the NFS server). The Results table above now reflects this local-weights number. 6 GiB+/rank reservations "succeed" then die on first touch in warmup (phantom backing). The 8-attempt hunt, the first-touch failure signature, and every lever that did NOT work are in [docs/KV-HUNT-672K-TP2-RECORD.md](docs/KV-HUNT-672K-TP2-RECORD.md).
 
 MTP metrics under real traffic: mean acceptance length 2.5–2.9, per-position acceptance ~[0.74, 0.47, 0.27, 0.15] — position 4 is nearly free-riding, so `num_speculative_tokens=3` is a candidate micro-tune.
 
