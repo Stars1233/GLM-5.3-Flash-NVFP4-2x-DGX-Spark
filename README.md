@@ -15,7 +15,7 @@ As far as we can tell this was the first working GLM-5.3-Flash deployment on DGX
 | Nodes | 2 | 2 | 4 (`launch-glm53-vllm-tp4.sh`) |
 | Boot time | ~14 min | ~21 min | **~12 min** (quarter weights/rank load faster) |
 
-TP4 also dissolves the GB10 KV-allocation ceiling documented in the memory-ladder study: at ~50 GiB weights per rank the 9 GiB KV slab allocates with ~60 GiB of slack � the 1M+ token pool that TP2 physically could not hold.
+TP4 also dissolves the GB10 KV-allocation ceiling documented in the memory-ladder study: at ~50 GiB weights per rank the 9 GiB KV slab allocates with ~60 GiB of slack � the 1M+ token pool that TP2 physically could not hold.
 
 MTP metrics under real traffic: mean acceptance length 2.5–2.9, per-position acceptance ~[0.74, 0.47, 0.27, 0.15] — position 4 is nearly free-riding, so `num_speculative_tokens=3` is a candidate micro-tune.
 
@@ -59,6 +59,10 @@ Smoke test:
 curl http://<head>:8000/v1/chat/completions -H 'Content-Type: application/json' \
   -d '{"model":"glm-5.3-flash","messages":[{"role":"user","content":"Say hello and name yourself."}],"max_tokens":40,"chat_template_kwargs":{"enable_thinking":false}}'
 ```
+
+## Fast loading: InstantTensor (added 2026-08-27)
+
+The v9 image adds the InstantTensor direct-I/O loader: **model load drops from ~10 minutes to 40-100 seconds** (`--load-format instanttensor`, already in the shipped launchers). Two things to know: its pip install silently downgrades NCCL to a fabric-fatal version (v9 re-pins 2.30.7 in the same layer), and because direct I/O never fills the page cache, it also defeats the first layer of the GB10 KV-allocation wall -- the full story and the remaining (unsolved) second wall are in [docs/GB10-KV-MEMORY-LADDER.md](docs/GB10-KV-MEMORY-LADDER.md). Credit: jack6464 (NVIDIA forum) for the pointer.
 
 ## Hard-won operational rules
 
