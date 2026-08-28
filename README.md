@@ -1,5 +1,32 @@
 # GLM-5.3-Flash NVFP4 + DFlash2 on 2x NVIDIA DGX Spark
 
+> ### ⚠️ Status: work in progress (2026-08-28)
+>
+> This repo is an active bring-up log, not a finished product. What is **proven and
+> reproducible** today:
+>
+> - **DFlash2 + fp8 KV at TP2, 262K context** — serving, benchmarked C1–C6 with zero
+>   failures, 46.9 tok/s single-stream at 74.1 % acceptance. This is the configuration
+>   the overlay and docs describe, and it is the one to copy.
+>
+> What is **partially working**:
+>
+> - **DFlash2 + NVFP4 KV at TP2** — serves and drafts correctly (35.9 tok/s, 0.563
+>   acceptance, 334K-token pool), but any prompt long enough to require chunked prefill
+>   (>~3K tokens) kills the rank-0 worker with no traceback. Root cause not yet found;
+>   suspicion is the standalone (non-slot-shared) drafter KV path, which only that lane
+>   exercises. See [`PORT-NOTES-B12X`](docs/DFLASH2-SPECULATIVE-DECODING.md#nvfp4-kv-lane-partial).
+>
+> What is **in flight**:
+>
+> - **DFlash2 at TP4 with 1M context on all four Sparks**, abliterated weights — booting
+>   as of this commit. Numbers will replace this line when it is measured, not before.
+>
+> Everything published here is measured on our own hardware and dated. If a number is
+> not in a table with a date next to it, treat it as unverified.
+
+
+
 Serving [zai-org/GLM-5.3-Flash](https://huggingface.co/zai-org/GLM-5.3-Flash) (320B total / 18B active MoE, released 2026-08-26) across two DGX Spark (GB10, SM121) nodes at tensor-parallel 2, using the [LibertAIDAI/GLM-5.3-Flash-NVFP4](https://huggingface.co/LibertAIDAI/GLM-5.3-Flash-NVFP4) weight-only NVFP4 quant. **262,144-token context on TP2 — and the model-native 1,048,576 (1M) on TP4, whose 3.77M-token KV pool holds 3.6 full 1M-token requests. Working, benchmarked, same-day as the model drop.**
 
 As far as we can tell this was the first working GLM-5.3-Flash deployment on DGX Spark hardware. Getting there took fixing **seven distinct day-0 bugs** across vLLM, FlashInfer, and their dependency chain — every one is documented in [docs/DEPLOY-REPORT.md](docs/DEPLOY-REPORT.md) with root causes, receipts, and the probe scripts that found them.

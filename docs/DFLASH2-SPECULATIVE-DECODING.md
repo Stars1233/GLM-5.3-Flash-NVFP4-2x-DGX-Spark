@@ -131,3 +131,35 @@ Healthy runtime signatures:
   `--kv-cache-memory 4445787956` a 3-way 20K-token prefill drove MemAvailable to
   3.06 GB and Tony's `dgx-anti-oom` watchdog (threshold 3 GB) killed the engine.
   Shipping pin is **3221225472** (310,292-token pool) for headroom under load.
+
+
+## NVFP4-KV lane (partial)
+
+The same overlay was ported onto the b12x NVFP4-KV stack (drowzeys' recipe: 4-bit
+`nvfp4_ds_mla` MLA cache, 368 B/token). **It serves and drafts correctly** —
+334,161-token pool, 35.9 tok/s on a 500-token code generation, acceptance 0.563
+(per-position 0.77 / 0.64 / 0.59 / 0.52 / 0.46 / 0.39 / 0.36), mean acceptance
+length ~4.9 — but it is **not production-ready**: any prompt long enough to require
+chunked prefill (~>3K tokens) kills the rank-0 worker with no traceback, no CUDA
+error and no OOM entry, on the first chunk (`num_computed_tokens=0`).
+
+Two porting differences worth recording, both caused by `--kv-cache-dtype-skip-layers
+sliding_window` (required — `nvfp4_ds_mla` is an MLA-record-only dtype, so the drafter's
+KV must stay bf16):
+
+1. **The skip-quant branch stamps the drafter's spec with `page_size_padded`** (from a
+   generic 576 B/token estimate, not the real 368 B record) and shrinks its block to the
+   backend's largest kernel block. That padded spec then trips the layout classifier's
+   "a drafter group must never be padded" guard, the model falls to the generic
+   uniform-page path, and `get_uniform_page_size` asserts. Fix: strip the inherited
+   padding before any geometry math (no-op on the fp8 lane).
+2. **Exact page fit is impossible on this stack** — `2,637,824 / 2048 = 1288 = 8 × 161`,
+   not a multiple of any kernel block size — so the drafter falls to the standalone
+   (own-tensor) path. That path had never run on real hardware, and it is the prime
+   suspect for the chunked-prefill kill.
+
+Ops note for anyone reproducing: on 121 GB nodes at TP2 this configuration leaves very
+little headroom, and **swap must be enabled with `vm.swappiness=0`** — not disabled.
+With swap off entirely the worker is killed during MoE marlin repack (no valve for the
+spike); with swap on and default swappiness, the kernel pages vLLM out mid-load and
+triggers a UVM driver livelock that freezes the shard loader at a reproducible point.
