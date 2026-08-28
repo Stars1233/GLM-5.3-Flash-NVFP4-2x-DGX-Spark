@@ -1,85 +1,106 @@
 # GLM-5.3-Flash NVFP4 + DFlash2 on 2x NVIDIA DGX Spark
 
-> 🔀 **Two Sparks? You're in the right place.** Running all **four**? The same images
-> scale to TP4 with the model-native 1M context — see the sibling repo:
-> **[GLM-5.3-Flash at TP4 · 1M KV · 4x DGX Spark →](https://github.com/tonyd2wild/GLM-5.3-Flash-NVFP4-1M-KV-4x-DGX-Spark)**
+OpenAI-compatible vLLM serving of [zai-org/GLM-5.3-Flash](https://huggingface.co/zai-org/GLM-5.3-Flash)
+(320B total / 18B active MoE) across two DGX Spark (GB10, SM121) nodes at tensor-parallel 2,
+using the [LibertAIDAI/GLM-5.3-Flash-NVFP4](https://huggingface.co/LibertAIDAI/GLM-5.3-Flash-NVFP4)
+weight-only quant, **fp8 KV cache**, and the [`incoai/GLM-5.3-Flash-DFlash2`](https://huggingface.co/incoai/GLM-5.3-Flash-DFlash2)
+speculative drafter. 262,144-token context. Deployed the same day the model dropped.
 
-> ### ⚠️ Status: work in progress (2026-08-28)
->
-> This repo is an active bring-up log, not a finished product. What is **proven and
-> reproducible** today:
->
-> - **DFlash2 + fp8 KV at TP2, 262K context** — serving, benchmarked C1–C6 with zero
->   failures, 46.9 tok/s single-stream at 74.1 % acceptance. This is the configuration
->   the overlay and docs describe, and it is the one to copy.
->
-> What is **partially working**:
->
-> - **DFlash2 + NVFP4 KV at TP2** — serves and drafts correctly (35.9 tok/s, 0.563
->   acceptance, 334K-token pool), but any prompt long enough to require chunked prefill
->   (>~3K tokens) kills the rank-0 worker with no traceback. Root cause not yet found;
->   suspicion is the standalone (non-slot-shared) drafter KV path, which only that lane
->   exercises. See [`PORT-NOTES-B12X`](docs/DFLASH2-SPECULATIVE-DECODING.md#nvfp4-kv-lane-partial).
->
-> What is **in flight**:
->
-> - **DFlash2 at TP4 with 1M context on all four Sparks** (abliterated weights) — **serving
->   at 68.5 tok/s single-stream**, 0.641 acceptance, 2,622,494-token KV pool, vision on,
->   28.8K-token deep-decode gate passed. Concurrency sweep in progress.
->
-> Everything published here is measured on our own hardware and dated. If a number is
-> not in a table with a date next to it, treat it as unverified.
+Two firsts, as far as we can tell: the **first working GLM-5.3-Flash deployment on DGX Spark**
+(seven day-0 bugs deep — [docs/DEPLOY-REPORT.md](docs/DEPLOY-REPORT.md)), and the **first
+working DFlash2 deployment of this model on GB10** ([docs/DFLASH2-SPECULATIVE-DECODING.md](docs/DFLASH2-SPECULATIVE-DECODING.md)).
 
+> 🔀 **Running all four Sparks?** The same images scale to TP4 with the model-native 1M context —
+> see the sibling repo: **[GLM-5.3-Flash at TP4 · 1M KV · 4x DGX Spark →](https://github.com/tonyd2wild/GLM-5.3-Flash-NVFP4-1M-KV-4x-DGX-Spark)**
 
+---
 
-Serving [zai-org/GLM-5.3-Flash](https://huggingface.co/zai-org/GLM-5.3-Flash) (320B total / 18B active MoE, released 2026-08-26) across two DGX Spark (GB10, SM121) nodes at tensor-parallel 2, using the [LibertAIDAI/GLM-5.3-Flash-NVFP4](https://huggingface.co/LibertAIDAI/GLM-5.3-Flash-NVFP4) weight-only NVFP4 quant. **262,144-token context on TP2 — and the model-native 1,048,576 (1M) on TP4, whose 3.77M-token KV pool holds 3.6 full 1M-token requests. Working, benchmarked, same-day as the model drop.**
+## Quickstart
 
-As far as we can tell this was the first working GLM-5.3-Flash deployment on DGX Spark hardware. Getting there took fixing **seven distinct day-0 bugs** across vLLM, FlashInfer, and their dependency chain — every one is documented in [docs/DEPLOY-REPORT.md](docs/DEPLOY-REPORT.md) with root causes, receipts, and the probe scripts that found them.
+**1. Pull the images** (GHCR, public, anonymous — no build required):
 
-## TP4 flagship — 68.5 tok/s single-stream, 1M context (2026-08-28)
+```bash
+docker pull ghcr.io/tonyd2wild/vllm-glm53-flash:sm121-v11-dflash2   # with DFlash2 (recommended)
+docker pull ghcr.io/tonyd2wild/vllm-glm53-flash:sm121-v8            # base, fp8 KV, no drafter
+```
 
-All four Sparks, abliterated NVFP4 weights, DFlash2 drafter, fp8 KV, `--max-model-len
-1048576`, 16 GiB/rank KV pin:
+They contain **only vLLM + our patches** — no model weights (those bind-mount at runtime).
+The launchers reference the local `radixark/…` tag names, so retag once:
+
+```bash
+docker tag ghcr.io/tonyd2wild/vllm-glm53-flash:sm121-v8 radixark/vllm-glm53-flash:sm121-v8
+```
+
+**2. Fetch the weights** to the same path on both nodes (or NFS-export from the head):
+[LibertAIDAI/GLM-5.3-Flash-NVFP4](https://huggingface.co/LibertAIDAI/GLM-5.3-Flash-NVFP4) →
+`/var/tmp/glm-5.3-flash-nvfp4`. For DFlash2, also fetch the drafter (2.2 GB) →
+`/var/tmp/models/GLM-5.3-Flash-DFlash2`.
+
+**3. Edit IPs/paths** at the top of [`launch-glm53-vllm-tp2.sh`](launch-glm53-vllm-tp2.sh),
+then launch — **pre-launch ritual on BOTH nodes, every time** (GB10 unified memory):
+
+```bash
+sync; echo 3 | sudo tee /proc/sys/vm/drop_caches      # both nodes
+./launch-glm53-vllm-tp2.sh 1    # worker FIRST
+sleep 25
+./launch-glm53-vllm-tp2.sh 0    # then head — serves :8000
+```
+
+**4. Smoke test** (~15 min to first response; the shard load dominates):
+
+```bash
+curl http://<head>:8000/v1/chat/completions -H 'Content-Type: application/json' \
+  -d '{"model":"glm-5.3-flash","messages":[{"role":"user","content":"2+2=?"}],
+       "max_tokens":40,"chat_template_kwargs":{"enable_thinking":false}}'
+```
+
+Full serve args, NCCL fabric env, and the rationale for every flag:
+[docs/DEPLOY-REPORT.md](docs/DEPLOY-REPORT.md).
+
+<details>
+<summary><b>Build the images yourself instead</b> (only if you want to modify the patches)</summary>
+
+The base is the public day-0 image:
+
+```bash
+docker pull vllm/vllm-openai:glm53-flash-arm64-cu130     # or -x86_64- for x86
+cd docker
+for i in $(seq 1 9); do
+  docker build -f "Dockerfile.glm53-sm121-v$i" -t "radixark/vllm-glm53-flash:sm121-v$i" . || break
+done
+docker save radixark/vllm-glm53-flash:sm121-v8 | ssh <worker> docker load
+```
+
+Each stage is `FROM` the previous, so order matters. For DFlash2, build
+[`overlay-dflash2/`](overlay-dflash2/) on top of v8 afterwards.
+
+> **Known issue:** on `main` the `FROM` lines of v2–v6 still reference the original ad-hoc tag
+> names (`sm121-nope-mla`, `sm121-fi618`, `sm121-fi618-nccl`, `sm121-final`) rather than
+> `sm121-v1…v5`, so the loop above only works after [#5](../../pull/5) (thanks @ozskywalker)
+> lands. Until then, tag each stage with the name the next Dockerfile expects.
+
+Published image digests, so you can tell whether a local build differs:
+`sm121-v8` → `sha256:d77d375c742fc54f436dec5108b440f58f021bc6600052bf0e8fe5840357e78f` ·
+`sm121-v11-dflash2` → `sha256:4def0ef644cb2e9814136dcffd5e385e21bc594f48f3b292234051904abe85a6`
+</details>
+
+---
+
+## Results (TP2, 2026-08-28)
+
+**DFlash2 + fp8 KV — the shipped configuration.** All measured on our own hardware; the
+harness is [`probes/bench_c1c6.py`](probes/bench_c1c6.py).
 
 | | value |
 |---|---|
-| C1 decode, code prompt, warm | **68.5 tok/s** (500 tokens / 7.3 s) |
-| draft acceptance | **0.641** (408 of 637 drafted) |
-| KV pool | **2,622,494 tokens** — 2.5x a full 1M-token request |
-| context | 1,048,576 |
-| vision | on (verified) |
-| 28.8K-token deep decode | passed, engine healthy after |
+| Single-stream decode, code prompt, warm | **46.9 tok/s** at 74.1 % draft acceptance |
+| Single-stream decode, structured output | **54–61 tok/s** (temp 0, 3 runs) |
+| KV pool | 310,292 tokens @ 3.0 GiB pin · 672,606 @ 5.5 GiB (local weights, no NFS duty) |
+| Context | 262,144 |
+| KV cost of the drafter | **zero** — it slot-shares the MLA tensors |
+| Boot | ~15 min (shard load dominates) |
 
-Concurrency sweep (2 waves/level, 400-token gens, mixed code+prose, **zero failures
-across all 42 requests**):
-
-| | C1 | C2 | C3 | C4 | C5 | C6 |
-|---|---|---|---|---|---|---|
-| aggregate tok/s | 55.2 | 52.3 | 59.7 | 84.4 | 85.2 | **100.1** |
-| per-stream tok/s | 55.2 | 29.5 | 26.9 | 28.6 | 21.0 | 19.8 |
-| accepted ÷ drafted | 0.48 | 0.42 | 0.40 | 0.40 | 0.39 | 0.35 |
-
-Unlike the TP2 lane — which peaks at C5 and falls off as speculation's verification
-cost saturates the batch — **TP4 keeps scaling to C6**: four nodes have the compute
-headroom to absorb the extra draft work, so aggregate throughput climbs past
-**100 tok/s**. The C1 row is lower than the 68.5 above because this sweep mixes prose
-into the prompt set (acceptance 0.48 vs 0.64 on pure code); both numbers are real,
-they answer different questions.
-
-The ladder tonight, all on the same fleet and prompt style: MTP-4 TP2 **21.8** →
-MTP-4 TP4 **35.7** → DFlash2 TP2 **46.9** → **DFlash2 TP4 68.5 tok/s** (3.1x).
-The drafter still costs zero KV pool at TP4 — it slot-shares the MLA tensors.
-
-## DFlash2 speculative decoding — 46.9 tok/s single-stream (2026-08-28)
-
-**First working DFlash2 deployment of GLM-5.3-Flash on GB10.** The
-[`incoai/GLM-5.3-Flash-DFlash2`](https://huggingface.co/incoai/GLM-5.3-Flash-DFlash2)
-block-diffusion drafter (published for SGLang) now runs on the vLLM route at TP2:
-**46.9 tok/s C1 decode vs 21.8 for MTP-4 — 2.15x — at 74.1 % draft acceptance**,
-and it costs **zero KV pool** (the drafter's layers slot-share the MLA tensors the
-way GLM's own mamba layers do).
-
-Concurrency sweep (2 waves/level, 400-token gens, mixed code+prose, zero failures):
+Concurrency sweep — 2 waves/level, 400-token generations, mixed code+prose, **zero failures**:
 
 | | C1 | C2 | C3 | C4 | C5 | C6 |
 |---|---|---|---|---|---|---|
@@ -87,189 +108,164 @@ Concurrency sweep (2 waves/level, 400-token gens, mixed code+prose, zero failure
 | per-stream tok/s | 35.1 | 23.2 | 17.3 | 15.3 | 17.5 | 13.3 |
 | accepted ÷ drafted | 0.53 | 0.45 | 0.42 | 0.40 | 0.51 | 0.40 |
 
-Warm single-stream on a code prompt hits **46.9 tok/s at 74.1 % acceptance**; the
-C1 row above is a mixed prompt set (prose drafts less well). Full table and how to
-read it: [docs/BENCH-C1-C6-DFLASH2.md](docs/BENCH-C1-C6-DFLASH2.md).
+**The progression**, same fleet, same prompt style:
 
-**Independent re-bench on max-acceptance structured output (warmed, temp 0, single-stream, off-box over the tailnet):** because DFlash2's throughput tracks how predictable the output is, we re-measured on the two most drafter-friendly regimes — where acceptance approaches 100 %:
+| config | decode | note |
+|---|---|---|
+| bf16, no speculation | 14.3 tok/s | |
+| fp8 KV + MTP-4 | 21.8 tok/s | previous flagship |
+| **fp8 KV + DFlash2** | **46.9 tok/s** | **2.15x** — this repo |
+| fp8 KV + DFlash2 at TP4 | 68.5 tok/s | four nodes, 1M context — [sibling repo](https://github.com/tonyd2wild/GLM-5.3-Flash-NVFP4-1M-KV-4x-DGX-Spark) |
 
-| Prompt (single-stream, warmed) | Decode | TTFT |
-|---|---:|---:|
-| 🔢 count 1→200 (structured) | **60.6 tok/s** (3/3 runs identical) | 0.44 s |
-| 🔤 alphabet ×8 | **54.0 tok/s** (median of 3) | — |
+Throughput tracks how *predictable* the output is, not just the config: structured/list/
+tool-argument output drafts at ~0.9 acceptance, freeform prose nearer 0.33. Agentic traffic
+lives in the high-acceptance zone. Detail and how to read these:
+[docs/BENCH-C1-C6-DFLASH2.md](docs/BENCH-C1-C6-DFLASH2.md).
 
-So on the structured / list / tool-argument output agents actually generate, the DFlash2 TP2 lane runs **~54–61 tok/s** — well above the 46.9 code-prompt figure and **~2.5–2.8× the 21.8 tok/s MTP-4 baseline**. Freeform prose drafts less well and sits lower; real agentic traffic lives in the high-acceptance zone.
+### Tuning notes
 
-Getting there took nine boots and four patches, including a KV-layout fix that
-keeps GLM on its custom fast path — the generic uniform-page path provably cannot
-serve this model with a drafter attached. Full method, every failure mode, and the
-padded-strided-view trap: **[docs/DFLASH2-SPECULATIVE-DECODING.md](docs/DFLASH2-SPECULATIVE-DECODING.md)**.
-Overlay (Dockerfile + 4 patches + simulation harness): [`overlay-dflash2/`](overlay-dflash2/).
+- **`temperature: 0` is free throughput** (+13–21 %). vLLM's rejection sampler does an exact
+  top-1 match at temp 0 but a probabilistic ratio test above it — and since the draft method is
+  greedy, the draft probability is pinned to 1, making the T>0 test strictly harder.
+- **`enable_thinking: false` is also the faster setting** (+8 % acceptance). Reasoning traces
+  are higher-entropy and draft worse.
+- **K=7 is optimal, don't sweep it.** Conditional per-position acceptance is nearly flat
+  (0.93/0.89/0.84/0.81/0.79/0.59/0.94), so the last position still earns; the drafter's
+  `block_size: 8` caps K at 7 anyway. A lower K gives a prettier *ratio* and worse throughput.
 
-## Results
+---
 
-| Metric | bf16 TP2 (v7) | fp8+MTP-4 TP2 (v8) | **fp8+MTP-4 TP4 (v8, flagship)** |
-|---|---|---|---|
-| TTFT (median, 3 runs) | 0.239 s | 0.289 s | **0.204 s** |
-| Decode | 14.3 tok/s | 21.8 tok/s | **35.7 tok/s (peak 36.8)** |
-| Context | 262,144 | 262,144 | **up to 1,048,576 (model-native 1M)** |
-| KV pool | 603,144 tokens | 672,606 tokens (local weights) | **2,516,582 tokens (2.4x full 1M context, forensics-gated)** |
-| Nodes | 2 | 2 | 4 (`launch-glm53-vllm-tp4.sh`) |
-| Boot time | ~14 min | ~21 min | **~12 min** (quarter weights/rank load faster) |
+## Status: work in progress
 
-TP4 also dissolves the GB10 KV-allocation ceiling documented in the memory-ladder study: at ~50 GiB weights per rank the 9 GiB KV slab allocates with ~60 GiB of slack — the 1M+ token pool that TP2 physically could not hold.
+This repo is an active bring-up log, not a finished product. Everything published here is
+measured on our own hardware and dated — **if a number is not in a dated table, treat it as
+unverified.**
 
-**5M KV / 1M context on TP4 (2026-08-27, stress-gated):** the shipped TP4 config is now **16 GiB KV per rank = 2,516,582 fp8 tokens** (see docs/SM121-CRASH-FORENSICS-2026-08-27.md for why bigger pools fail), found by the residual-headroom rule: grow the KV slab until ~8-10 GB stays available per node. 38 GiB (5.97M tokens) allocates and even answers short prompts, then the first 20K-token prefill's activation transient NVRM-OOMs the engine — "serving" is not the bar, surviving a long prefill is. Gate every KV bump behind CONCURRENT prefills: 32 GiB passed a single-prefill gate, then died under three overlapping requests from real traffic (the head rank also carries the API server + NFS duty). 24 GiB survives 3x simultaneous 20K prefills with ~18 GB residual on the head.
+| | state |
+|---|---|
+| **DFlash2 + fp8 KV, TP2** | ✅ **Proven.** Benchmarked C1–C6, zero failures. This is the config to copy. |
+| **DFlash2 + fp8 KV, TP4 / 1M ctx** | ✅ Serving — 68.5 tok/s, 2,622,494-token pool. See the sibling repo. |
+| **DFlash2 + NVFP4 KV, TP2** | ⚠️ **Partial.** Serves and drafts (35.9 tok/s, 0.563 acceptance, 334K pool), but prompts long enough to need chunked prefill (>~3K tokens) kill the rank-0 worker. Root cause open; the standalone drafter KV path is the suspect. [Details](docs/DFLASH2-SPECULATIVE-DECODING.md). |
+| **InstantTensor fast load** | ⚠️ Experimental — 15x faster loads, unstable multi-node. See below. |
 
-**1M context on TP4:** GLM-5.3-Flash ships `max_position_embeddings = 1,048,576`, and the TP4 KV pool (3,774,873 tokens) holds 3.6 full-length requests, so `--max-model-len 1048576` is within both the model's and the pool's limits — no rope scaling, no overrides. The launcher now defaults to 1M. Practical notes: a full 1M-token prefill takes many minutes of wall clock before the first output token, and concurrency at full depth is ~1.2 requests; cap `--max-model-len` lower (e.g. 300000) when you want a snappier multi-user endpoint.
-
-**TP2 KV update (2026-08-27):** with LOCAL weights on both ranks (no NFS duty) plus an aggressive cache-flush ritual, TP2 holds **672,606 fp8 KV tokens** (`--kv-cache-memory 5905580032`), stress-verified — a +33% jump over the 507,041-token NFS-bound ceiling (which still applies when one rank doubles as the NFS server). The Results table above now reflects this local-weights number. 6 GiB+/rank reservations "succeed" then die on first touch in warmup (phantom backing). The 8-attempt hunt, the first-touch failure signature, and every lever that did NOT work are in [docs/KV-HUNT-672K-TP2-RECORD.md](docs/KV-HUNT-672K-TP2-RECORD.md).
-
-MTP metrics under real traffic: mean acceptance length 2.5–2.9, per-position acceptance ~[0.74, 0.47, 0.27, 0.15] — position 4 is nearly free-riding, so `num_speculative_tokens=3` is a candidate micro-tune.
+---
 
 ## Why this needs a patched image
 
-The vLLM PR authors' day-0 image (`vllm/vllm-openai:glm53-flash-arm64-cu130`) works on B200. On GB10/SM121 it fails five separate ways. Our derivative (`docker/Dockerfile.glm53-sm121*`, applied in order v1→v7) fixes:
+The vLLM PR authors' day-0 image (`vllm/vllm-openai:glm53-flash-arm64-cu130`) works on B200.
+On GB10/SM121 it fails five separate ways. Our derivative (`docker/Dockerfile.glm53-sm121*`,
+applied in order) fixes:
 
-1. **NoPE MLA vs the SM12x sparse backend** — the only stock capability-12 sparse-attention backend requires the packed `fp8_ds_mla` cache layout, which hardcodes DeepSeek's `pe_dim=64`. GLM-5.3 is NoPE (`qk_rope_head_dim=0`) → assert death in warmup. Fix: extend vLLM's SM90 NoPE sparse-MLA backend (FlashInfer `BatchMLAPagedAttentionWrapper`, plain bf16 cache) to SM121 with the FA2 path — probed directly on the GPU with the model's real shape before trusting it (`probes/probe_sm121_nope_mla.py`).
-2. **FlashInfer 0.6.17 FA2 MLA NaN** — the FA2 scheduler produces NaN for 64–256-row batches on SM121 (bisect: `probes/probe_fa2_bisect.py`). Normal prompts land exactly there. Fix: FlashInfer **0.6.18 nightly**.
-3. **The nightly's dependency sabotage** — installing it silently downgrades `nvidia-nccl-cu13` to 2.29.7 (NCCL "internal error" on the Spark IB fabric; re-pin **2.30.7**) and skews `nvidia-cutlass-dsl` to a mixed 4.7.0/4.6.2 install (CuTeDSL warmup ICE; re-pin **4.6.2**). Audit transitive pins after ANY pip install in these images.
-4. **PDL on unvalidated silicon** — vLLM enables Programmatic Dependent Launch for capability ≥ 9, including SM121, in the Triton kernels carrying KDA recurrent state. Gated off on SM12x.
-5. **Indexer uninitialized top-k** — the kpool top-k destination was `torch.empty` and the kernels only guarantee the first `min(k, valid)` entries; short rows carried garbage pool ids → bogus token indices → attention gathers uninitialized KV → NaN lottery. Fix: init to `-1` + clamp expanded pool ids (`docker/patch_v7.py`).
-6. **fp8 KV cache unlock** (v8, `docker/patch_v8_fp8.py`) — see the fp8 section below. Also learned the hard way: MTP's draft head (+~5GB) at gmu 0.85 trips GB10 unified-memory OOM (`NV_ERR_NO_MEMORY` in dmesg, death on first request) — pin the budget with `--kv-cache-memory` (vLLM prints the safe number in its startup log) instead of riding the gmu edge.
+1. **NoPE MLA vs the SM12x sparse backend** — the only stock capability-12 sparse-attention
+   backend requires the packed `fp8_ds_mla` layout, which hardcodes DeepSeek's `pe_dim=64`.
+   GLM-5.3 is NoPE (`qk_rope_head_dim=0`) → assert death in warmup. Fix: extend vLLM's SM90
+   NoPE sparse-MLA backend to SM121 with the FA2 path — probed on-GPU with the model's real
+   shape before trusting it (`probes/probe_sm121_nope_mla.py`).
+2. **FlashInfer 0.6.17 FA2 MLA NaN** — the FA2 scheduler produces NaN for 64–256-row batches
+   on SM121 (bisect: `probes/probe_fa2_bisect.py`), and normal prompts land exactly there.
+   Fix: FlashInfer **0.6.18 nightly**.
+3. **The nightly's dependency sabotage** — it silently downgrades `nvidia-nccl-cu13` to 2.29.7
+   (NCCL "internal error" on the Spark IB fabric; re-pin **2.30.7**) and skews
+   `nvidia-cutlass-dsl` to a mixed 4.7.0/4.6.2 state (CuTeDSL warmup ICE; re-pin **4.6.2**).
+   Audit transitive pins after ANY pip install in these images.
+4. **PDL on unvalidated silicon** — vLLM enables Programmatic Dependent Launch for capability
+   ≥ 9, including SM121, in the Triton kernels carrying KDA recurrent state. Gated off on SM12x.
+5. **Indexer uninitialized top-k** — the kpool top-k destination was `torch.empty` and the
+   kernels only guarantee the first `min(k, valid)` entries; short rows carried garbage pool
+   ids → bogus token indices → NaN lottery. Fix: init to `-1` + clamp (`docker/patch_v7.py`).
+6. **fp8 KV cache unlock** (v8, `docker/patch_v8_fp8.py`) — see below.
 
-Two serve-flag landmines (no code needed):
-- `--block-size 2304` — vLLM's hybrid block aligner picks a size whose kpool storage tiles by 32, but DeepGEMM's arch-12 fp8 paged-MQA accepts only 64-entry pool pages. 2304 is a multiple of kpool·64 and of the MLA 128 alignment.
-- `--gpu-memory-utilization 0.85` — 0.78–0.80 starve the bf16 KV cache at 131K+. (Credit: barrydeen's independent recipe.)
+Two serve-flag landmines, no code needed:
 
-## About the images (read this first)
+- **`--block-size 2304`** — vLLM's hybrid block aligner picks a size whose kpool storage tiles
+  by 32, but DeepGEMM's arch-12 fp8 paged-MQA accepts only 64-entry pool pages. 2304 is a
+  multiple of kpool·64 and of the MLA 128 alignment.
+- **`--gpu-memory-utilization 0.85`** — 0.78–0.80 starve the KV cache at 131K+.
+  (Credit: barrydeen's independent recipe.)
 
-**The images are published — pull them directly, no build required** (GitHub Container
-Registry, public, anonymous pull):
+### fp8 KV cache on GB10: a world first, and a two-line fix
 
-```bash
-# base patched image (fp8 KV, the config the docs describe)
-docker pull ghcr.io/tonyd2wild/vllm-glm53-flash:sm121-v8
+FlashInfer gates fp8 MLA KV to SM90, and naively relaxing the gate fails with CUDA "invalid
+argument" (`probes/probe_fa2_fp8.py`). The real cause (`docker/patch_v8_fp8.py`): the fa2 fp8
+branch **forces `CTA_TILE_KV=32`, a Hopper 228KB-smem assumption**. On GB10's ~101KB opt-in max
+that over-requests shared memory (117,312 B > 101,376 B) at `cudaFuncSetAttribute`, before the
+kernel ever launches. **Capping the tile instead of forcing it** (fp8 keeps TKV=16 on
+100KB-class devices — 91,680 B, fits) makes fp8 KV work: verified on-GPU, rel-err ~0.005 vs an
+fp32 reference, then end-to-end in production.
 
-# same image + DFlash2 speculative-decoding overlay
-docker pull ghcr.io/tonyd2wild/vllm-glm53-flash:sm121-v11-dflash2
-```
+As far as we can tell this is the first fp8 KV cache for a NoPE-MLA model on any consumer
+Blackwell part. Upstream-ready issue drafts with receipts:
+`docs/issue-flashinfer-fp8-mla-sm121.md`, `docs/issue-vllm-nope-fp8-ds-mla.md`.
 
-Published 2026-08-28. Digests (so you can tell if a local build differs):
-- `sm121-v8` → `sha256:d77d375c742fc54f436dec5108b440f58f021bc6600052bf0e8fe5840357e78f`
-- `sm121-v11-dflash2` → `sha256:4def0ef644cb2e9814136dcffd5e385e21bc594f48f3b292234051904abe85a6`
-
-The images contain **only vLLM + our patch files** — no model weights (those bind-mount
-at runtime, see the launchers). The `radixark/…` tags the launchers reference are the
-local build tags; retag or edit the launcher to the `ghcr.io/tonyd2wild/…` names above,
-or just `docker tag` them locally:
-
-```bash
-docker tag ghcr.io/tonyd2wild/vllm-glm53-flash:sm121-v8 radixark/vllm-glm53-flash:sm121-v8
-```
-
-### Build it yourself instead (if you want to modify the patches)
-
-The base you build from is the public day-0 image:
-
-```bash
-docker pull vllm/vllm-openai:glm53-flash-arm64-cu130     # or -x86_64- for x86
-```
-
-Build the stack **in order** — each stage is `FROM` the previous:
-
-```bash
-cd docker
-for i in $(seq 1 9); do
-  docker build -f "Dockerfile.glm53-sm121-v$i" -t "radixark/vllm-glm53-flash:sm121-v$i" . || break
-done
-```
-
-Ship the final tag to the other node(s) with no registry:
-
-```bash
-docker save radixark/vllm-glm53-flash:sm121-v8 | ssh <worker> docker load
-```
-
-For DFlash2, build [`overlay-dflash2/`](overlay-dflash2/) on top of v8 afterwards.
-
-> **Known issue:** on `main` the `FROM` lines of v2–v6 still reference the original
-> ad-hoc tag names (`sm121-nope-mla`, `sm121-fi618`, `sm121-fi618-nccl`, `sm121-final`)
-> rather than `sm121-v1…v5`, so the loop above only works after
-> [#5](../../pull/5) (thanks @ozskywalker) lands. Until then, either apply that PR
-> locally or tag each stage with the name the next Dockerfile expects.
-
-## Quickstart
-
-Nodes: head owns the weights and serves `:8000`; worker mounts them over NFS at the same path.
-
-```bash
-# 1. Build the patched image on the head, ship to the worker
-docker build -f docker/Dockerfile.glm53-sm121 -t glm53:sm121-v1 .   # then v2..v7 in order, each FROM the previous
-docker save glm53:sm121-v7 | ssh worker docker load
-
-# 2. Pre-launch ritual (BOTH nodes, every launch — GB10 unified memory)
-sync; echo 3 | sudo tee /proc/sys/vm/drop_caches
-# worker: verify the NFS mount answers: ls /var/tmp/glm-5.3-flash-nvfp4/config.json
-
-# 3. Launch worker FIRST, wait ~25 s, then head
-./launch-glm53-vllm-tp2.sh 1   # on the worker
-./launch-glm53-vllm-tp2.sh 0   # on the head
-```
-
-Edit the top of `launch-glm53-vllm-tp2.sh` for your IPs/paths. Full serve args, NCCL fabric env, and rationale for every flag: [docs/DEPLOY-REPORT.md](docs/DEPLOY-REPORT.md).
-
-Smoke test:
-```bash
-curl http://<head>:8000/v1/chat/completions -H 'Content-Type: application/json' \
-  -d '{"model":"glm-5.3-flash","messages":[{"role":"user","content":"Say hello and name yourself."}],"max_tokens":40,"chat_template_kwargs":{"enable_thinking":false}}'
-```
-
-## Fast loading: InstantTensor (added 2026-08-27)
-
-**Status: experimental — measured 15x load speedup, but NOT stable in our multi-node TP2 topology.** The v9 image adds the InstantTensor direct-I/O loader (`--load-format instanttensor`): loads drop from ~10 minutes to 40-100 seconds and the page cache stays empty. However, in ALL four of our v9 TP2 boots a rank died silently ~1 minute after loading (exit code None, nothing in dmesg) — at every KV budget, including the otherwise rock-stable 4.14 GiB — so the shipped launchers do NOT enable it and the stable image remains v8. This matches the known multi-node instability class for direct-IO loaders on Spark (eugr/spark-vllm-docker#29 reports fastsafetensors hanging in cluster mode). Single-node or TP4 use may fare better; re-test when upstream moves. Other things to know: its pip install silently downgrades NCCL to a fabric-fatal version (v9 re-pins 2.30.7 in the same layer), and because direct I/O never fills the page cache, it also defeats the first layer of the GB10 KV-allocation wall -- the full story and the remaining (unsolved) second wall are in [docs/GB10-KV-MEMORY-LADDER.md](docs/GB10-KV-MEMORY-LADDER.md). Credit: jack6464 (NVIDIA forum) for the pointer.
+---
 
 ## Hard-won operational rules
 
-- **Tear down BOTH ranks before relaunching either.** A new rank that rendezvouses with a dying one hangs or dies confusingly.
-- **`grep '^IMAGE' launch-*.sh` on BOTH nodes before every launch.** Two of our "mystery" garbage boots were a silent image-version mismatch between ranks (in-place remote edits had failed silently). Copy whole files between nodes, never sed over ssh.
+- **Tear down BOTH ranks before relaunching either.** A rank that rendezvouses with a dying one
+  hangs or dies confusingly.
+- **`grep '^IMAGE' launch-*.sh` on BOTH nodes before every launch.** Two "mystery" garbage boots
+  were a silent image-version mismatch between ranks. Copy whole files between nodes; never
+  `sed` over ssh.
 - **Capture `docker logs` before `docker rm -f`.**
-- Two consecutive unexplained deaths = stop and diagnose, never crash-loop.
-- `max_tokens` includes reasoning tokens when thinking is on; pass `chat_template_kwargs: {"enable_thinking": false}` per-request to disable.
+- **Two consecutive unexplained deaths = stop and diagnose.** Never crash-loop.
+- **Swap on with `vm.swappiness=0`** — not off. Fully disabled, the worker dies during MoE
+  marlin repack with no valve; at default swappiness the kernel pages vLLM out mid-load and
+  triggers a UVM driver livelock that freezes the shard loader.
+- `max_tokens` includes reasoning tokens when thinking is on; disable per-request with
+  `chat_template_kwargs: {"enable_thinking": false}`.
 
-## fp8 KV cache on GB10: a world first, and it's a two-line fix
+---
 
-FlashInfer gates fp8 MLA KV to SM90, and naively relaxing the gate fails with CUDA "invalid argument" (`probes/probe_fa2_fp8.py`). The actual root cause (`docker/patch_v8_fp8.py`): the fa2 fp8 branch **forces CTA_TILE_KV=32 — a Hopper 228KB-smem assumption**. On GB10's ~101KB opt-in max that doubles the tile picked for this device and over-requests shared memory (117,312B > 101,376B) at `cudaFuncSetAttribute`, before the kernel ever launches. **Capping the tile instead of forcing it** (fp8 keeps TKV=16 on 100KB-class devices — 91,680B, fits) plus the gate relax makes fp8 KV work: verified on-GPU with all batch shapes clean and rel-err ~0.005 vs an fp32 reference (normal fp8 quantization noise), then validated end-to-end serving GLM-5.3 with MTP.
+## Deeper reading
 
-As far as we can tell this is the first fp8 KV cache for a NoPE-MLA model on any consumer Blackwell part (GB10 or RTX PRO 6000 SM120 — see `docs/issue-flashinfer-fp8-mla-sm121.md` and `docs/issue-vllm-nope-fp8-ds-mla.md`, upstream-ready issue drafts with the receipts).
+| doc | what's in it |
+|---|---|
+| [DEPLOY-REPORT](docs/DEPLOY-REPORT.md) | the seven day-0 bugs, root causes, receipts, every serve flag |
+| [DFLASH2-SPECULATIVE-DECODING](docs/DFLASH2-SPECULATIVE-DECODING.md) | the drafter port: four patches, the KV-layout fix, nine boots of failure modes |
+| [BENCH-C1-C6-DFLASH2](docs/BENCH-C1-C6-DFLASH2.md) | full concurrency tables and how to read them |
+| [SM121-CRASH-FORENSICS](docs/SM121-CRASH-FORENSICS-2026-08-27.md) | why the fleet "randomly" died: a topk kernel bug and phantom KV backing |
+| [GB10-KV-MEMORY-LADDER](docs/GB10-KV-MEMORY-LADDER.md) | why KV budgets above vLLM's suggestion die, and the driver-level mechanism |
+| [KV-HUNT-672K-TP2-RECORD](docs/KV-HUNT-672K-TP2-RECORD.md) | the 8-attempt hunt past the 507K wall |
 
-See also [docs/GB10-KV-MEMORY-LADDER.md](docs/GB10-KV-MEMORY-LADDER.md) — the six-boot study of why KV budgets above vLLM's suggested number die on GB10, with the cache-flusher mitigation ([cache_flusher.sh](cache_flusher.sh)) and the driver-level mechanism.
+**Debugging kit** (reusable for any day-0 model on new silicon): `probes/probe_sm121_nope_mla.py`
+(probe a kernel with your real geometry before patching arch gates) · `probes/probe_fa2_bisect.py`
+(NaN bisect over batch shapes) · `probes/probe_mhc.py` (A/B a Triton kernel vs its torch
+reference) · `probes/gb10_alloc_probe.py` (map the allocation wall) · `probes/bench_c1c6.py`.
+The deploy report also describes the env-gated forward-hook NaN localizer (`GLM53_NAN_DEBUG=1`)
+that names the first module emitting non-finite values.
 
-Phase-3 option (documented, not built): a ~40-line "zero-pad rope" shim would route NoPE models onto the Blackwell-native trtllm packed-fp8 decode kernel — faster decode, needs one FlashInfer kernel re-instantiation for GLM's 2176-wide kpool index buffer.
+### Fast loading: InstantTensor (experimental)
 
-## Debugging kit (reusable for any day-0 model on new silicon)
+The v9 image adds the InstantTensor direct-I/O loader (`--load-format instanttensor`): loads
+drop from ~10 minutes to 40–100 seconds and the page cache stays empty. **But in all four of
+our v9 TP2 boots a rank died silently ~1 minute after loading** (exit code None, nothing in
+dmesg) at every KV budget — so the shipped launchers do not enable it and the stable image
+remains v8. This matches the known multi-node instability class for direct-IO loaders on Spark
+(eugr/spark-vllm-docker#29). Because direct I/O never fills the page cache it also defeats the
+first layer of the GB10 KV-allocation wall — full story in
+[docs/GB10-KV-MEMORY-LADDER.md](docs/GB10-KV-MEMORY-LADDER.md). Credit: jack6464 (NVIDIA forum).
 
-- `probes/probe_sm121_nope_mla.py` — probe a FlashInfer kernel with your model's real geometry BEFORE patching arch gates.
-- `probes/probe_fa2_bisect.py` — NaN bisect harness over batch shapes.
-- `probes/probe_mhc.py` — A/B a Triton/TileLang kernel vs its torch reference.
-- The deploy report describes the env-gated forward-hook NaN localizer (`GLM53_NAN_DEBUG=1` build) that names the first module emitting non-finite values — how we localized both NaN sources.
-- `probes/bench_glm53.py` — 3-run TTFT/decode benchmark.
+### vLLM v0.28.0 status (checked 2026-08-27)
 
-## vLLM v0.28.0 status (checked 2026-08-27)
+**Not viable for GLM-5.3 yet**: the `glm5_next` architecture is not in the v0.28.0 release
+(vllm-project/vllm#53906 still unmerged at check time) and no rebased day-0 image exists. The
+day-0 image used here is itself a main-branch dev snapshot (`0.1.dev20051`) cut near the 0.28
+branch point — this stack already runs 0.28-era engine code *plus* the GLM support 0.28 lacks.
+Porting is mechanical when it opens: the patches are guarded string-replacements that apply or
+refuse loudly.
 
-**Not viable for GLM-5.3 yet**: the `glm5_next` architecture is NOT in the v0.28.0 release
-(PR vllm-project/vllm#53906 still open/unmerged at check time), and no rebased day-0 image
-exists (all `vllm/vllm-openai:glm53-flash*` tags still date to the original 2026-08-26 push).
-The day-0 image used here is itself a main-branch dev snapshot (`0.1.dev20051`) cut around
-the 0.28 branch point -- i.e. this stack already runs 0.28-era engine code plus the GLM
-support 0.28 lacks. Upgrade path when it opens: watch the PR and the Docker Hub tags; the
-patch stack here is guarded string-patches that apply-or-refuse loudly, so porting to a new
-base is mechanical (apply v1->v10 in order, fix whichever guards fire, ladder through the
-experiment lane before production).
+---
 
 ## Credits
 
-- Model: [zai-org/GLM-5.3-Flash](https://huggingface.co/zai-org/GLM-5.3-Flash) · Quant: [LibertAIDAI/GLM-5.3-Flash-NVFP4](https://huggingface.co/LibertAIDAI/GLM-5.3-Flash-NVFP4) (their sm_121 notes were used directly)
-- **barrydeen** — the gmu 0.85 reference config and quantization-coverage table from their independently published DGX Spark recipe
-- vLLM [PR #53906](https://github.com/vllm-project/vllm/pull/53906) authors for the day-0 image; FlashInfer for the 0.6.18 SM90-NoPE MLA path
+- **Model**: [zai-org/GLM-5.3-Flash](https://huggingface.co/zai-org/GLM-5.3-Flash) ·
+  **Quant**: [LibertAIDAI/GLM-5.3-Flash-NVFP4](https://huggingface.co/LibertAIDAI/GLM-5.3-Flash-NVFP4)
+  (their sm_121 notes were used directly) ·
+  **Drafter**: [incoai/GLM-5.3-Flash-DFlash2](https://huggingface.co/incoai/GLM-5.3-Flash-DFlash2)
+- **barrydeen** — the gmu 0.85 reference config and quantization-coverage table from their
+  independently published DGX Spark recipe
+- **@ozskywalker** — [#5](../../pull/5), Dockerfile tag chain + build script
+- vLLM [PR #53906](https://github.com/vllm-project/vllm/pull/53906) authors for the day-0 image;
+  FlashInfer for the 0.6.18 SM90-NoPE MLA path; upstream
+  [PR #52816](https://github.com/vllm-project/vllm/pull/52816) for DFlash2
 - Deployed and debugged by Knox (Claude) for [@tonyd2wild](https://github.com/tonyd2wild)
