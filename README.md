@@ -29,6 +29,7 @@ The launchers reference the local `radixark/…` tag names, so retag once:
 
 ```bash
 docker tag ghcr.io/tonyd2wild/vllm-glm53-flash:sm121-v8 radixark/vllm-glm53-flash:sm121-v8
+docker tag ghcr.io/tonyd2wild/vllm-glm53-flash:sm121-v11-dflash2 radixark/vllm-glm53-flash:sm121-v11-dflash2
 ```
 
 **2. Fetch the weights** to the same path on both nodes (or NFS-export from the head):
@@ -36,17 +37,41 @@ docker tag ghcr.io/tonyd2wild/vllm-glm53-flash:sm121-v8 radixark/vllm-glm53-flas
 `/var/tmp/glm-5.3-flash-nvfp4`. For DFlash2, also fetch the drafter (2.2 GB) →
 `/var/tmp/models/GLM-5.3-Flash-DFlash2`.
 
-**3. Edit IPs/paths** at the top of [`launch-glm53-vllm-tp2.sh`](launch-glm53-vllm-tp2.sh),
-then launch — **pre-launch ritual on BOTH nodes, every time** (GB10 unified memory):
+**3. Install the SM121 top-k fix** on **both** nodes. Both published images still contain a
+decode-time top-k kernel that hard-kills the engine on any decode past ~24K context on GB10
+(the launcher bind-mounts the fix over it):
+
+```bash
+mkdir -p ~/patches
+cp docker/sparse_attn_indexer_kpool_sm121.py ~/patches/sparse_attn_indexer_kpool.py
+```
+
+Why, and what the crash looks like: [docs/SM121-CRASH-FORENSICS](docs/SM121-CRASH-FORENSICS-2026-08-27.md).
+
+**4. Edit the launcher for your fabric.** Set the IPs/paths at the top of
+[`launch-glm53-vllm-tp2-dflash2.sh`](launch-glm53-vllm-tp2-dflash2.sh), **and the NCCL
+interface names inside the `docker run` body** (`NCCL_IB_HCA`, `NCCL_SOCKET_IFNAME`,
+`NCCL_IB_ADDR_RANGE`) — wrong NIC names fail silently. `ibdev2netdev` and `ip -br a` will
+tell you what yours are.
+
+Then launch — **pre-launch ritual on BOTH nodes, every time** (GB10 unified memory):
 
 ```bash
 sync; echo 3 | sudo tee /proc/sys/vm/drop_caches      # both nodes
-./launch-glm53-vllm-tp2.sh 1    # worker FIRST
+./launch-glm53-vllm-tp2-dflash2.sh 1    # worker FIRST
 sleep 25
-./launch-glm53-vllm-tp2.sh 0    # then head — serves :8000
+./launch-glm53-vllm-tp2-dflash2.sh 0    # then head — serves :8000
 ```
 
-**4. Smoke test** (~15 min to first response; the shard load dominates):
+Without the drafter, use [`launch-glm53-vllm-tp2.sh`](launch-glm53-vllm-tp2.sh) (v8 image,
+MTP-4, ~21.8 tok/s) — same ritual.
+
+**5. Smoke test.** Wait for readiness first (~15 min; the shard load dominates). Poll
+`/health`, **never `/v1/models`** — that returns 200 even with a dead engine:
+
+```bash
+until curl -sf http://<head>:8000/health >/dev/null; do sleep 20; done
+```
 
 ```bash
 curl http://<head>:8000/v1/chat/completions -H 'Content-Type: application/json' \
@@ -71,7 +96,7 @@ done
 docker save radixark/vllm-glm53-flash:sm121-v8 | ssh <worker> docker load
 ```
 
-Each stage is `FROM` the previous, so order matters. For DFlash2, build
+The chain is mostly linear (v1→v3→v4→…→v9); **v2 is an optional NaN-debug branch off v1** that nothing else builds on. For DFlash2, build
 [`overlay-dflash2/`](overlay-dflash2/) on top of v8 afterwards.
 
 > **Known issue:** on `main` the `FROM` lines of v2–v6 still reference the original ad-hoc tag
@@ -89,13 +114,14 @@ Published image digests, so you can tell whether a local build differs:
 ## Results (TP2, 2026-08-28)
 
 **DFlash2 + fp8 KV — the shipped configuration.** All measured on our own hardware; the
-harness is [`probes/bench_c1c6.py`](probes/bench_c1c6.py).
+harness is [`probes/bench_c1c6.py`](probes/bench_c1c6.py), run as:
+`python3 probes/bench_c1c6.py --url http://<head>:8000 --rounds 2 --max-tokens 400`
 
 | | value |
 |---|---|
 | Single-stream decode, code prompt, warm | **46.9 tok/s** at 74.1 % draft acceptance |
 | Single-stream decode, structured output | **54–61 tok/s** (temp 0, 3 runs) |
-| KV pool | 310,292 tokens @ 3.0 GiB pin · 672,606 @ 5.5 GiB (local weights, no NFS duty) |
+| KV pool | 310,292 tokens @ a 3.0 GiB pin (larger pins trip the memory watchdog under concurrent load) |
 | Context | 262,144 |
 | KV cost of the drafter | **zero** — it slot-shares the MLA tensors |
 | Boot | ~15 min (shard load dominates) |
@@ -127,8 +153,9 @@ lives in the high-acceptance zone. Detail and how to read these:
 - **`temperature: 0` is free throughput** (+13–21 %). vLLM's rejection sampler does an exact
   top-1 match at temp 0 but a probabilistic ratio test above it — and since the draft method is
   greedy, the draft probability is pinned to 1, making the T>0 test strictly harder.
-- **`enable_thinking: false` is also the faster setting** (+8 % acceptance). Reasoning traces
-  are higher-entropy and draft worse.
+- **`enable_thinking: false` is also the faster setting** (+8 % acceptance) — reasoning traces
+  are higher-entropy and draft worse. Caveat: with thinking off GLM emits untagged
+  reasoning-prose into `content`, which some agent harnesses mis-parse; see the deploy report.
 - **K=7 is optimal, don't sweep it.** Conditional per-position acceptance is nearly flat
   (0.93/0.89/0.84/0.81/0.79/0.59/0.94), so the last position still earns; the drafter's
   `block_size: 8` caps K at 7 anyway. A lower K gives a prettier *ratio* and worse throughput.
@@ -154,7 +181,7 @@ unverified.**
 
 The vLLM PR authors' day-0 image (`vllm/vllm-openai:glm53-flash-arm64-cu130`) works on B200.
 On GB10/SM121 it fails five separate ways. Our derivative (`docker/Dockerfile.glm53-sm121*`,
-applied in order) fixes:
+applied in order) fixes those five, then adds a sixth patch that unlocks fp8 KV:
 
 1. **NoPE MLA vs the SM12x sparse backend** — the only stock capability-12 sparse-attention
    backend requires the packed `fp8_ds_mla` layout, which hardcodes DeepSeek's `pe_dim=64`.
@@ -183,7 +210,7 @@ Two serve-flag landmines, no code needed:
 - **`--gpu-memory-utilization 0.85`** — 0.78–0.80 starve the KV cache at 131K+.
   (Credit: barrydeen's independent recipe.)
 
-### fp8 KV cache on GB10: a world first, and a two-line fix
+### fp8 KV cache on GB10: a two-line fix (and, as far as we can tell, a first)
 
 FlashInfer gates fp8 MLA KV to SM90, and naively relaxing the gate fails with CUDA "invalid
 argument" (`probes/probe_fa2_fp8.py`). The real cause (`docker/patch_v8_fp8.py`): the fa2 fp8
@@ -207,6 +234,7 @@ Blackwell part. Upstream-ready issue drafts with receipts:
   were a silent image-version mismatch between ranks. Copy whole files between nodes; never
   `sed` over ssh.
 - **Capture `docker logs` before `docker rm -f`.**
+- **Probe `/health` for liveness, never `/v1/models`** — the latter returns 200 from config alone, with a dead engine behind it.
 - **Two consecutive unexplained deaths = stop and diagnose.** Never crash-loop.
 - **Swap on with `vm.swappiness=0`** — not off. Fully disabled, the worker dies during MoE
   marlin repack with no valve; at default swappiness the kernel pages vLLM out mid-load and

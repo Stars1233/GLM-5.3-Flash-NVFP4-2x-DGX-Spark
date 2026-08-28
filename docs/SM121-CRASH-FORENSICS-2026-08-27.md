@@ -31,6 +31,7 @@ parts take the existing `top_k_per_row_decode` fallback (no smem wall). Deploy b
 bind-mount, no image rebuild:
 
 ```
+# cp docker/sparse_attn_indexer_kpool_sm121.py $HOME/patches/sparse_attn_indexer_kpool.py
 -v $HOME/patches/sparse_attn_indexer_kpool.py:/usr/local/lib/python3.12/dist-packages/vllm/model_executor/layers/sparse_attn_indexer_kpool.py:ro
 ```
 

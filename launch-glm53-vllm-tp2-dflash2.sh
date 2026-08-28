@@ -1,4 +1,17 @@
 #!/usr/bin/env bash
+#
+# GLM-5.3-Flash + DFlash2 speculative decoding, TP2 on 2x DGX Spark (GB10/SM121).
+# This is the configuration behind the README's 46.9 tok/s figure.
+#
+# Prerequisites (see README Quickstart):
+#   1. docker tag ghcr.io/tonyd2wild/vllm-glm53-flash:sm121-v11-dflash2 #        radixark/vllm-glm53-flash:sm121-v11-dflash2
+#   2. weights at $MODEL_HOST_PATH on BOTH nodes
+#   3. drafter (2.2 GB) at /var/tmp/models/GLM-5.3-Flash-DFlash2 on BOTH nodes
+#   4. cp docker/sparse_attn_indexer_kpool_sm121.py $HOME/patches/sparse_attn_indexer_kpool.py
+#      on BOTH nodes -- the SM121 top-k fix. Without it the engine dies on any
+#      decode past ~24K context (docs/SM121-CRASH-FORENSICS-2026-08-27.md).
+#
+# Usage: ./launch-glm53-vllm-tp2-dflash2.sh <0|1>   -- worker (1) FIRST, then head (0)
 set -euo pipefail
 
 # GLM-5.3-Flash-NVFP4 on Reddie (head, rank 0) + Spark4 (worker, rank 1), vLLM TP2 over the fabric.
@@ -8,7 +21,7 @@ set -euo pipefail
 NODE_RANK="${1:?usage: launch-glm53-vllm-tp2.sh <0|1>}"
 [[ "$NODE_RANK" == "0" || "$NODE_RANK" == "1" ]] || { echo "rank must be 0 or 1" >&2; exit 2; }
 
-IMAGE="radixark/vllm-glm53-flash:sm121-v8"
+IMAGE="radixark/vllm-glm53-flash:sm121-v11-dflash2"
 NAME="vllm_glm53"
 MODEL_HOST_PATH="/var/tmp/glm-5.3-flash-nvfp4"
 MODEL_PATH="/models/glm-5.3-flash-nvfp4"
@@ -49,6 +62,8 @@ docker run --gpus all -d \
   -e NCCL_NVLS_ENABLE=0 -e NCCL_CROSS_NIC=0 -e NCCL_IB_MERGE_NICS=0 \
   -e NCCL_CUMEM_ENABLE=0 -e NCCL_IGNORE_CPU_AFFINITY=1 -e NCCL_DEBUG=WARN \
   -e TORCH_NCCL_ASYNC_ERROR_HANDLING=1 \
+  -v $HOME/patches/sparse_attn_indexer_kpool.py:/usr/local/lib/python3.12/dist-packages/vllm/model_executor/layers/sparse_attn_indexer_kpool.py:ro \
+  -v /var/tmp/models/GLM-5.3-Flash-DFlash2:/models/dflash2-draft:ro \
   "$IMAGE" \
     "$MODEL_PATH" \
     --served-model-name glm-5.3-flash \
@@ -57,10 +72,10 @@ docker run --gpus all -d \
     --tensor-parallel-size 2 \
     --gpu-memory-utilization 0.85 \
     --max-model-len 262144 \
-    --max-num-seqs 6 --block-size 2304 --moe-backend marlin --speculative-config '{"method":"mtp","num_speculative_tokens":4}' --kv-cache-dtype fp8_e4m3 --kv-cache-memory 4445787956 \
+    --max-num-seqs 6 --block-size 2304 --moe-backend marlin --speculative-config '{"method":"dflash","model":"/models/dflash2-draft","num_speculative_tokens":7}' --kv-cache-dtype fp8_e4m3 --kv-cache-memory 3221225472 \
     --enforce-eager \
     --tool-call-parser glm47 --enable-auto-tool-choice \
-    --reasoning-parser glm45 --default-chat-template-kwargs '{"enable_thinking": false}' \
+    --reasoning-parser glm45 --default-chat-template-kwargs '{"enable_thinking":false}' --chat-template /models/glm-5.3-flash-nvfp4/chat_template_mm.jinja \
     --distributed-executor-backend mp \
     --nnodes 2 --node-rank "$NODE_RANK" \
     --master-addr "$HEAD_IP" --master-port "$MPORT" \
