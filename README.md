@@ -19,8 +19,9 @@
 >
 > What is **in flight**:
 >
-> - **DFlash2 at TP4 with 1M context on all four Sparks**, abliterated weights — booting
->   as of this commit. Numbers will replace this line when it is measured, not before.
+> - **DFlash2 at TP4 with 1M context on all four Sparks** (abliterated weights) — **serving
+>   at 68.5 tok/s single-stream**, 0.641 acceptance, 2,622,494-token KV pool, vision on,
+>   28.8K-token deep-decode gate passed. Concurrency sweep in progress.
 >
 > Everything published here is measured on our own hardware and dated. If a number is
 > not in a table with a date next to it, treat it as unverified.
@@ -30,6 +31,24 @@
 Serving [zai-org/GLM-5.3-Flash](https://huggingface.co/zai-org/GLM-5.3-Flash) (320B total / 18B active MoE, released 2026-08-26) across two DGX Spark (GB10, SM121) nodes at tensor-parallel 2, using the [LibertAIDAI/GLM-5.3-Flash-NVFP4](https://huggingface.co/LibertAIDAI/GLM-5.3-Flash-NVFP4) weight-only NVFP4 quant. **262,144-token context on TP2 — and the model-native 1,048,576 (1M) on TP4, whose 3.77M-token KV pool holds 3.6 full 1M-token requests. Working, benchmarked, same-day as the model drop.**
 
 As far as we can tell this was the first working GLM-5.3-Flash deployment on DGX Spark hardware. Getting there took fixing **seven distinct day-0 bugs** across vLLM, FlashInfer, and their dependency chain — every one is documented in [docs/DEPLOY-REPORT.md](docs/DEPLOY-REPORT.md) with root causes, receipts, and the probe scripts that found them.
+
+## TP4 flagship — 68.5 tok/s single-stream, 1M context (2026-08-28)
+
+All four Sparks, abliterated NVFP4 weights, DFlash2 drafter, fp8 KV, `--max-model-len
+1048576`, 16 GiB/rank KV pin:
+
+| | value |
+|---|---|
+| C1 decode, code prompt, warm | **68.5 tok/s** (500 tokens / 7.3 s) |
+| draft acceptance | **0.641** (408 of 637 drafted) |
+| KV pool | **2,622,494 tokens** — 2.5x a full 1M-token request |
+| context | 1,048,576 |
+| vision | on (verified) |
+| 28.8K-token deep decode | passed, engine healthy after |
+
+The ladder tonight, all on the same fleet and prompt style: MTP-4 TP2 **21.8** →
+MTP-4 TP4 **35.7** → DFlash2 TP2 **46.9** → **DFlash2 TP4 68.5 tok/s** (3.1x).
+The drafter still costs zero KV pool at TP4 — it slot-shares the MLA tensors.
 
 ## DFlash2 speculative decoding — 46.9 tok/s single-stream (2026-08-28)
 
