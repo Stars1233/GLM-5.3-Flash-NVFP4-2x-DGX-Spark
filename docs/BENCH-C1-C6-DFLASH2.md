@@ -49,3 +49,28 @@ The first requests after a boot JIT-compile `_prepare_dflash_inputs_kernel`,
 `_topk_topp_kernel` and `mhc_pre_big_fuse_with_norm_tilelang`. A C1 measurement
 taken cold reads ~10 tok/s low (36.9 vs 46.9 observed on the same config). Warm
 the engine before benchmarking.
+
+
+## TP4 flagship sweep (2026-08-28)
+
+All four Sparks, abliterated NVFP4 weights, DFlash2 K=7, fp8 KV, `--max-model-len
+1048576`, `--kv-cache-memory 17179869184` (2,622,494-token pool). Same harness and
+prompt mix as the TP2 table above.
+
+| concurrency | aggregate tok/s | per-stream tok/s | mean wall s | failures | accepted ÷ drafted |
+|---|---|---|---|---|---|
+| C1 | 55.2 | 55.2 | 7.2 | 0 | 0.483 |
+| C2 | 52.3 | 29.5 | 15.3 | 0 | 0.415 |
+| C3 | 59.7 | 26.9 | 19.6 | 0 | 0.398 |
+| C4 | 84.4 | 28.6 | 18.8 | 0 | 0.395 |
+| C5 | 85.2 | 21.0 | 22.9 | 0 | 0.389 |
+| **C6** | **100.1** | 19.8 | 24.0 | 0 | 0.345 |
+
+Warm single-stream on a pure code prompt: **68.5 tok/s at 0.641 acceptance**.
+
+The shape of this curve is the interesting part. On TP2 aggregate throughput peaks at
+C5 (56.2) and drops at C6 — speculation trades compute for latency, and once the batch
+saturates, verifying 7 draft tokens per step stops paying for itself. At TP4 that
+ceiling moves out past C6: the extra compute absorbs the draft work, so aggregate
+climbs monotonically from C3 onward and crosses 100 tok/s while per-stream latency
+stays near 20 tok/s. If you are serving many users, TP4 + DFlash2 gives you both.

@@ -46,6 +46,22 @@ All four Sparks, abliterated NVFP4 weights, DFlash2 drafter, fp8 KV, `--max-mode
 | vision | on (verified) |
 | 28.8K-token deep decode | passed, engine healthy after |
 
+Concurrency sweep (2 waves/level, 400-token gens, mixed code+prose, **zero failures
+across all 42 requests**):
+
+| | C1 | C2 | C3 | C4 | C5 | C6 |
+|---|---|---|---|---|---|---|
+| aggregate tok/s | 55.2 | 52.3 | 59.7 | 84.4 | 85.2 | **100.1** |
+| per-stream tok/s | 55.2 | 29.5 | 26.9 | 28.6 | 21.0 | 19.8 |
+| accepted ÷ drafted | 0.48 | 0.42 | 0.40 | 0.40 | 0.39 | 0.35 |
+
+Unlike the TP2 lane — which peaks at C5 and falls off as speculation's verification
+cost saturates the batch — **TP4 keeps scaling to C6**: four nodes have the compute
+headroom to absorb the extra draft work, so aggregate throughput climbs past
+**100 tok/s**. The C1 row is lower than the 68.5 above because this sweep mixes prose
+into the prompt set (acceptance 0.48 vs 0.64 on pure code); both numbers are real,
+they answer different questions.
+
 The ladder tonight, all on the same fleet and prompt style: MTP-4 TP2 **21.8** →
 MTP-4 TP4 **35.7** → DFlash2 TP2 **46.9** → **DFlash2 TP4 68.5 tok/s** (3.1x).
 The drafter still costs zero KV pool at TP4 — it slot-shares the MLA tensors.
