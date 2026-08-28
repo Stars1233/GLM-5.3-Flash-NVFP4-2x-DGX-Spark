@@ -1,4 +1,4 @@
-# GLM-5.3-Flash + DFlash2 on 2x NVIDIA DGX Spark
+# GLM-5.3-Flash NVFP4 + DFlash2 on 2x NVIDIA DGX Spark
 
 Serving [zai-org/GLM-5.3-Flash](https://huggingface.co/zai-org/GLM-5.3-Flash) (320B total / 18B active MoE, released 2026-08-26) across two DGX Spark (GB10, SM121) nodes at tensor-parallel 2, using the [LibertAIDAI/GLM-5.3-Flash-NVFP4](https://huggingface.co/LibertAIDAI/GLM-5.3-Flash-NVFP4) weight-only NVFP4 quant. **262,144-token context on TP2 — and the model-native 1,048,576 (1M) on TP4, whose 3.77M-token KV pool holds 3.6 full 1M-token requests. Working, benchmarked, same-day as the model drop.**
 
