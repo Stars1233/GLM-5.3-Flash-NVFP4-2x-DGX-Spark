@@ -121,7 +121,7 @@ harness is [`probes/bench_c1c6.py`](probes/bench_c1c6.py), run as:
 |---|---|
 | Single-stream decode, code prompt, warm | **46.9 tok/s** at 74.1 % draft acceptance |
 | Single-stream decode, structured output | **54–61 tok/s** (temp 0, 3 runs) |
-| KV pool | 310,292 tokens @ a 3.0 GiB pin (larger pins trip the memory watchdog under concurrent load) |
+| KV pool | **727,583 tokens** @ a 7 GiB pin (watchdog-free; see the ladder below) · 310,292 @ 3.0 GiB with the watchdog armed |
 | Context | 262,144 |
 | KV cost of the drafter | **zero** — it slot-shares the MLA tensors |
 | Boot | ~15 min (shard load dominates) |
@@ -147,6 +147,31 @@ Throughput tracks how *predictable* the output is, not just the config: structur
 tool-argument output drafts at ~0.9 acceptance, freeform prose nearer 0.33. Agentic traffic
 lives in the high-acceptance zone. Detail and how to read these:
 [docs/BENCH-C1-C6-DFLASH2.md](docs/BENCH-C1-C6-DFLASH2.md).
+
+### KV pool ceiling on TP2 (2026-08-28)
+
+How far the fp8 KV pool can be pushed on a two-Spark pair, measured by walking the pin
+down until a config both served **and** survived a real request. Every row is a full
+~15-minute boot on this hardware:
+
+| `--kv-cache-memory` | pool | outcome |
+|---|---|---|
+| 12 GiB | — | node locked hard; required a power cycle |
+| 10 GiB | 1,037,876 | allocated, then took down both nodes during warmup |
+| 8 GiB | 829,231 | allocated; warmup peaked at **391 MB** available — no margin |
+| 7.5 GiB | 778,407 | **served**, then died on the first real request (`EngineDeadError`) |
+| **7 GiB** | **727,583** | **serving, survived a 500-token generation** — 41.6 tok/s, 0.616 acceptance ✅ |
+
+**7 GiB is the usable ceiling**, +8 % over the previous 672,606 record. Two caveats that
+matter more than the number:
+
+- It requires the memory watchdogs **disabled**. With a 3 GB anti-OOM threshold armed, the
+  warmup spike trips it and the engine is killed — which is the watchdog working correctly.
+  Running watchdog-free means a bad config locks the machine instead of losing a container;
+  we power-cycled a node twice getting this data.
+- **Allocation is not survival, and serving is not survival either.** 7.5 GiB opened its
+  endpoint and passed `/health` before dying on the first inference. Gate any KV increase on
+  a real generation with the engine verified alive afterward.
 
 ### Tuning notes
 
