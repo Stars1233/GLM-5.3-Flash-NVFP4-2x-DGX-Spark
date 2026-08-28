@@ -140,18 +140,39 @@ Two serve-flag landmines (no code needed):
 
 ## About the images (read this first)
 
-**Nothing in this repo is pullable.** `radixark/vllm-glm53-flash:sm121-*` is a *local
-build tag*, not a published registry image — if Docker asks you to log in or says you
-need access, that is the expected failure, not a permissions problem on your side.
+**The images are published — pull them directly, no build required** (GitHub Container
+Registry, public, anonymous pull):
 
-The only image you pull is the public day-0 base:
+```bash
+# base patched image (fp8 KV, the config the docs describe)
+docker pull ghcr.io/tonyd2wild/vllm-glm53-flash:sm121-v8
+
+# same image + DFlash2 speculative-decoding overlay
+docker pull ghcr.io/tonyd2wild/vllm-glm53-flash:sm121-v11-dflash2
+```
+
+Published 2026-08-28. Digests (so you can tell if a local build differs):
+- `sm121-v8` → `sha256:d77d375c742fc54f436dec5108b440f58f021bc6600052bf0e8fe5840357e78f`
+- `sm121-v11-dflash2` → `sha256:4def0ef644cb2e9814136dcffd5e385e21bc594f48f3b292234051904abe85a6`
+
+The images contain **only vLLM + our patch files** — no model weights (those bind-mount
+at runtime, see the launchers). The `radixark/…` tags the launchers reference are the
+local build tags; retag or edit the launcher to the `ghcr.io/tonyd2wild/…` names above,
+or just `docker tag` them locally:
+
+```bash
+docker tag ghcr.io/tonyd2wild/vllm-glm53-flash:sm121-v8 radixark/vllm-glm53-flash:sm121-v8
+```
+
+### Build it yourself instead (if you want to modify the patches)
+
+The base you build from is the public day-0 image:
 
 ```bash
 docker pull vllm/vllm-openai:glm53-flash-arm64-cu130     # or -x86_64- for x86
 ```
 
-Everything else you build locally, **in order**, because each stage is `FROM` the
-previous one:
+Build the stack **in order** — each stage is `FROM` the previous:
 
 ```bash
 cd docker
@@ -160,7 +181,7 @@ for i in $(seq 1 9); do
 done
 ```
 
-Then ship the final tag to the other node(s) — there is no registry involved:
+Ship the final tag to the other node(s) with no registry:
 
 ```bash
 docker save radixark/vllm-glm53-flash:sm121-v8 | ssh <worker> docker load
