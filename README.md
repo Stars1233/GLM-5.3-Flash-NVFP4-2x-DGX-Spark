@@ -138,6 +138,42 @@ Two serve-flag landmines (no code needed):
 - `--block-size 2304` — vLLM's hybrid block aligner picks a size whose kpool storage tiles by 32, but DeepGEMM's arch-12 fp8 paged-MQA accepts only 64-entry pool pages. 2304 is a multiple of kpool·64 and of the MLA 128 alignment.
 - `--gpu-memory-utilization 0.85` — 0.78–0.80 starve the bf16 KV cache at 131K+. (Credit: barrydeen's independent recipe.)
 
+## About the images (read this first)
+
+**Nothing in this repo is pullable.** `radixark/vllm-glm53-flash:sm121-*` is a *local
+build tag*, not a published registry image — if Docker asks you to log in or says you
+need access, that is the expected failure, not a permissions problem on your side.
+
+The only image you pull is the public day-0 base:
+
+```bash
+docker pull vllm/vllm-openai:glm53-flash-arm64-cu130     # or -x86_64- for x86
+```
+
+Everything else you build locally, **in order**, because each stage is `FROM` the
+previous one:
+
+```bash
+cd docker
+for i in $(seq 1 9); do
+  docker build -f "Dockerfile.glm53-sm121-v$i" -t "radixark/vllm-glm53-flash:sm121-v$i" . || break
+done
+```
+
+Then ship the final tag to the other node(s) — there is no registry involved:
+
+```bash
+docker save radixark/vllm-glm53-flash:sm121-v8 | ssh <worker> docker load
+```
+
+For DFlash2, build [`overlay-dflash2/`](overlay-dflash2/) on top of v8 afterwards.
+
+> **Known issue:** on `main` the `FROM` lines of v2–v6 still reference the original
+> ad-hoc tag names (`sm121-nope-mla`, `sm121-fi618`, `sm121-fi618-nccl`, `sm121-final`)
+> rather than `sm121-v1…v5`, so the loop above only works after
+> [#5](../../pull/5) (thanks @ozskywalker) lands. Until then, either apply that PR
+> locally or tag each stage with the name the next Dockerfile expects.
+
 ## Quickstart
 
 Nodes: head owns the weights and serves `:8000`; worker mounts them over NFS at the same path.
