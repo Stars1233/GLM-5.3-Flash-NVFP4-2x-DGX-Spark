@@ -25,6 +25,15 @@ Warm single-stream on a code prompt hits **46.9 tok/s at 74.1 % acceptance**; th
 C1 row above is a mixed prompt set (prose drafts less well). Full table and how to
 read it: [docs/BENCH-C1-C6-DFLASH2.md](docs/BENCH-C1-C6-DFLASH2.md).
 
+**Independent re-bench on max-acceptance structured output (warmed, temp 0, single-stream, off-box over the tailnet):** because DFlash2's throughput tracks how predictable the output is, we re-measured on the two most drafter-friendly regimes — where acceptance approaches 100 %:
+
+| Prompt (single-stream, warmed) | Decode | TTFT |
+|---|---:|---:|
+| 🔢 count 1→200 (structured) | **60.6 tok/s** (3/3 runs identical) | 0.44 s |
+| 🔤 alphabet ×8 | **54.0 tok/s** (median of 3) | — |
+
+So on the structured / list / tool-argument output agents actually generate, the DFlash2 TP2 lane runs **~54–61 tok/s** — well above the 46.9 code-prompt figure and **~2.5–2.8× the 21.8 tok/s MTP-4 baseline**. Freeform prose drafts less well and sits lower; real agentic traffic lives in the high-acceptance zone.
+
 Getting there took nine boots and four patches, including a KV-layout fix that
 keeps GLM on its custom fast path — the generic uniform-page path provably cannot
 serve this model with a drafter attached. Full method, every failure mode, and the
