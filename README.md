@@ -1,8 +1,23 @@
-# GLM-5.3-Flash on 2x NVIDIA DGX Spark
+# GLM-5.3-Flash + DFlash2 on 2x NVIDIA DGX Spark
 
 Serving [zai-org/GLM-5.3-Flash](https://huggingface.co/zai-org/GLM-5.3-Flash) (320B total / 18B active MoE, released 2026-08-26) across two DGX Spark (GB10, SM121) nodes at tensor-parallel 2, using the [LibertAIDAI/GLM-5.3-Flash-NVFP4](https://huggingface.co/LibertAIDAI/GLM-5.3-Flash-NVFP4) weight-only NVFP4 quant. **262,144-token context on TP2 — and the model-native 1,048,576 (1M) on TP4, whose 3.77M-token KV pool holds 3.6 full 1M-token requests. Working, benchmarked, same-day as the model drop.**
 
 As far as we can tell this was the first working GLM-5.3-Flash deployment on DGX Spark hardware. Getting there took fixing **seven distinct day-0 bugs** across vLLM, FlashInfer, and their dependency chain — every one is documented in [docs/DEPLOY-REPORT.md](docs/DEPLOY-REPORT.md) with root causes, receipts, and the probe scripts that found them.
+
+## DFlash2 speculative decoding — 46.9 tok/s single-stream (2026-08-28)
+
+**First working DFlash2 deployment of GLM-5.3-Flash on GB10.** The
+[`incoai/GLM-5.3-Flash-DFlash2`](https://huggingface.co/incoai/GLM-5.3-Flash-DFlash2)
+block-diffusion drafter (published for SGLang) now runs on the vLLM route at TP2:
+**46.9 tok/s C1 decode vs 21.8 for MTP-4 — 2.15x — at 74.1 % draft acceptance**,
+and it costs **zero KV pool** (the drafter's layers slot-share the MLA tensors the
+way GLM's own mamba layers do).
+
+Getting there took nine boots and four patches, including a KV-layout fix that
+keeps GLM on its custom fast path — the generic uniform-page path provably cannot
+serve this model with a drafter attached. Full method, every failure mode, and the
+padded-strided-view trap: **[docs/DFLASH2-SPECULATIVE-DECODING.md](docs/DFLASH2-SPECULATIVE-DECODING.md)**.
+Overlay (Dockerfile + 4 patches + simulation harness): [`overlay-dflash2/`](overlay-dflash2/).
 
 ## Results
 
