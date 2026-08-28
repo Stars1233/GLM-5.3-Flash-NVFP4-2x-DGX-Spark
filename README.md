@@ -1,5 +1,9 @@
 # GLM-5.3-Flash NVFP4 + DFlash2 on 2x NVIDIA DGX Spark
 
+> 🔀 **Two Sparks? You're in the right place.** Running all **four**? The same images
+> scale to TP4 with the model-native 1M context — see the sibling repo:
+> **[GLM-5.3-Flash at TP4 · 1M KV · 4x DGX Spark →](https://github.com/tonyd2wild/GLM-5.3-Flash-NVFP4-1M-KV-4x-DGX-Spark)**
+
 > ### ⚠️ Status: work in progress (2026-08-28)
 >
 > This repo is an active bring-up log, not a finished product. What is **proven and
