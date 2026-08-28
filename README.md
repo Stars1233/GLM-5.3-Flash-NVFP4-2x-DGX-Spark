@@ -13,6 +13,18 @@ block-diffusion drafter (published for SGLang) now runs on the vLLM route at TP2
 and it costs **zero KV pool** (the drafter's layers slot-share the MLA tensors the
 way GLM's own mamba layers do).
 
+Concurrency sweep (2 waves/level, 400-token gens, mixed code+prose, zero failures):
+
+| | C1 | C2 | C3 | C4 | C5 | C6 |
+|---|---|---|---|---|---|---|
+| aggregate tok/s | 35.1 | 41.6 | 40.6 | 47.5 | **56.2** | 47.7 |
+| per-stream tok/s | 35.1 | 23.2 | 17.3 | 15.3 | 17.5 | 13.3 |
+| accepted ÷ drafted | 0.53 | 0.45 | 0.42 | 0.40 | 0.51 | 0.40 |
+
+Warm single-stream on a code prompt hits **46.9 tok/s at 74.1 % acceptance**; the
+C1 row above is a mixed prompt set (prose drafts less well). Full table and how to
+read it: [docs/BENCH-C1-C6-DFLASH2.md](docs/BENCH-C1-C6-DFLASH2.md).
+
 Getting there took nine boots and four patches, including a KV-layout fix that
 keeps GLM on its custom fast path — the generic uniform-page path provably cannot
 serve this model with a drafter attached. Full method, every failure mode, and the
