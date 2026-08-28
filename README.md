@@ -121,7 +121,7 @@ harness is [`probes/bench_c1c6.py`](probes/bench_c1c6.py), run as:
 |---|---|
 | Single-stream decode, code prompt, warm | **46.9 tok/s** at 74.1 % draft acceptance |
 | Single-stream decode, structured output | **54–61 tok/s** (temp 0, 3 runs) |
-| KV pool | **727,583 tokens** @ a 7 GiB pin (watchdog-free; see the ladder below) · 310,292 @ 3.0 GiB with the watchdog armed |
+| KV pool | **581,040 tokens** @ 262K context, profiler-sized (see the ceiling section) |
 | Context | 262,144 |
 | KV cost of the drafter | **zero** — it slot-shares the MLA tensors |
 | Boot | ~15 min (shard load dominates) |
@@ -150,28 +150,51 @@ lives in the high-acceptance zone. Detail and how to read these:
 
 ### KV pool ceiling on TP2 (2026-08-28)
 
-How far the fp8 KV pool can be pushed on a two-Spark pair, measured by walking the pin
-down until a config both served **and** survived a real request. Every row is a full
-~15-minute boot on this hardware:
+**Let vLLM's profiler size the pool. Do not pin `--kv-cache-memory`.**
 
-| `--kv-cache-memory` | pool | outcome |
+That is the entire lesson, and it cost us a night of boots to learn. When you pass
+`--kv-cache-memory`, vLLM still runs the profile pass but **never subtracts the measured
+activation peak** (`gpu_worker.py:475-495`) — it hands you exactly the number you asked
+for and `--gpu-memory-utilization` becomes dead. Allocation succeeds, warmup succeeds, a
+short generation succeeds, and then the first long prompt has nowhere to put its
+activations and the engine dies. We reproduced that failure at four different pins.
+
+Profiler-sized figures, all at `--max-model-len 262144` so they are comparable:
+
+| config | KV pool | verified |
 |---|---|---|
-| 12 GiB | — | node locked hard; required a power cycle |
-| 10 GiB | 1,037,876 | allocated, then took down both nodes during warmup |
-| 8 GiB | 829,231 | allocated; warmup peaked at **391 MB** available — no margin |
-| 7.5 GiB | 778,407 | **served**, then died on the first real request (`EngineDeadError`) |
-| **7 GiB** | **727,583** | **serving, survived a 500-token generation** — 41.6 tok/s, 0.616 acceptance ✅ |
+| **DFlash2 + fp8 KV** | **581,040 tokens** | serving; survived a 28,818-token prompt with the engine healthy after |
+| **No drafter, fp8 KV** | **965,166 tokens** | allocated and booted; long-prompt survival not yet confirmed |
 
-**7 GiB is the usable ceiling**, +8 % over the previous 672,606 record. Two caveats that
-matter more than the number:
+**The DFlash2 drafter costs ~4.8 GiB of KV headroom** — far more than its 2.2 GiB of
+weights — which is a real trade nobody had priced: roughly **+91 % decode speed for −40 %
+pool**. Choose per workload.
 
-- It requires the memory watchdogs **disabled**. With a 3 GB anti-OOM threshold armed, the
-  warmup spike trips it and the engine is killed — which is the watchdog working correctly.
-  Running watchdog-free means a bad config locks the machine instead of losing a container;
-  we power-cycled a node twice getting this data.
-- **Allocation is not survival, and serving is not survival either.** 7.5 GiB opened its
-  endpoint and passed `/health` before dying on the first inference. Gate any KV increase on
-  a real generation with the engine verified alive afterward.
+Three traps worth knowing before you tune this yourself:
+
+- **The reported pool inflates with context.** `GPU KV cache size` is
+  `int(max_concurrency × max_model_len)` (`kv_cache_utils.py:2264`), so raising
+  `--max-model-len` raises the headline number without adding a byte of memory. Only
+  `blocks × block_size`, or bytes/token, compares honestly across configs — and it is why
+  pool figures published at 900K or 1M context are not comparable to figures at 262K.
+- **`Available KV cache memory` is logged by rank 0 only, but the pool is built from the
+  minimum across ranks** (`kv_cache_utils.py:2554`). One of our boots logged 6.25 GiB and
+  bound 2.29 GiB. Read that line on **every** rank before trusting it.
+- **The TP worker rank profiles 4–5 GiB less KV headroom than the head**, reproducibly, on
+  both of our node pairs, independent of the drafter, of NFS, and of which physical machine
+  is which. That asymmetry caps the pool and we have not explained it; it looks like an
+  upstream vLLM question rather than a configuration error.
+
+Operational note: on these 121 GiB unified-memory nodes, `vm.swappiness=0` is mandatory
+and **does not survive a reboot**. With swap active the kernel pages vLLM out mid-load and
+triggers a UVM driver livelock — one worker thread spinning at 100 %+ CPU, `UVM GPU` kthread
+hot, GPU reporting high utilization at idle wattage, shard loading frozen at a reproducible
+point. It does not recover on its own.
+
+> A previous revision of this section published a 727,583-token figure at a 7 GiB pin as
+> the usable ceiling. That configuration is **unsafe** (pinned, so no activation headroom),
+> and no log of that measurement survived — it was quoted from a terminal session rather
+> than a captured file. It has been withdrawn rather than restated.
 
 ### Tuning notes
 
