@@ -6,6 +6,23 @@ using the [LibertAIDAI/GLM-5.3-Flash-NVFP4](https://huggingface.co/LibertAIDAI/G
 weight-only quant, **fp8 KV cache**, and the [`incoai/GLM-5.3-Flash-DFlash2`](https://huggingface.co/incoai/GLM-5.3-Flash-DFlash2)
 speculative drafter. 262,144-token context. Deployed the same day the model dropped.
 
+---
+
+## ⭐ Checkpoint: `RedHatAI/GLM-5.3-Flash-NVFP4` is now the default (corruption fix)
+
+ModelOpt-quantized NVFP4 builds of GLM-5.3-Flash (`LibertAIDAI/GLM-5.3-Flash-NVFP4` and the abliterated variants) emit **intermittent corrupted token IDs** ([vLLM #54150](https://github.com/vllm-project/vllm/issues/54150)). Nearly invisible in English, but when a corrupted token lands inside a tool-call block the parser desyncs and generation can spiral into a repetition lock.
+
+We reproduced and fixed it on this exact cluster (Korean-Hangul probe, `temperature 0`, non-streaming, 3 passes):
+
+| checkpoint | `quant_method` | U+FFFD count (3 runs) |
+|---|---|---|
+| ModelOpt NVFP4 (LibertAIDAI / keys-ablit) | `modelopt` | 4 / 9 / 8 |
+| **[RedHatAI/GLM-5.3-Flash-NVFP4](https://huggingface.co/RedHatAI/GLM-5.3-Flash-NVFP4)** | **`compressed-tensors`** | **0 / 0 / 0** |
+
+**Default checkpoint: `RedHatAI/GLM-5.3-Flash-NVFP4`.** Ungated, same `Glm5NextForConditionalGeneration` arch, **drop-in** — no flag changes (`--moe-backend marlin`, DFlash2 `k=7`, fp8 KV all identical), just repoint the model path. Loads ~2x faster (11 large shards vs 120 small). Tradeoff: it also quantizes activations to 4-bit (W4A4) where the weight-only builds are W4A16, so expect a few points lower on hard reasoning — but the output is **correct**. Make sure the vision `chat_template_mm.jinja` is present in the weights dir or image requests 500.
+
+Corruption first flagged by [@ajclark](https://github.com/ajclark) (issue #10). Uncensored (abliterated) builds remain available but carry the ModelOpt corruption until a compressed-tensors abliteration exists.
+
 ## Weights: censored or uncensored (drop-in)
 
 Pick your weights: **same launcher, same recipe**, just point the model path at either. Both are NVFP4 and load identically.
