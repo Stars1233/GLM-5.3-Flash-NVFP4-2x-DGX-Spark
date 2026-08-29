@@ -6,6 +6,17 @@ using the [LibertAIDAI/GLM-5.3-Flash-NVFP4](https://huggingface.co/LibertAIDAI/G
 weight-only quant, **fp8 KV cache**, and the [`incoai/GLM-5.3-Flash-DFlash2`](https://huggingface.co/incoai/GLM-5.3-Flash-DFlash2)
 speculative drafter. 262,144-token context. Deployed the same day the model dropped.
 
+## Weights: censored or uncensored (drop-in)
+
+Pick your weights: **same launcher, same recipe**, just point the model path at either. Both are NVFP4 and load identically.
+
+| | HuggingFace | notes |
+|---|---|---|
+| **Censored** | [LibertAIDAI/GLM-5.3-Flash-NVFP4](https://huggingface.co/LibertAIDAI/GLM-5.3-Flash-NVFP4) | stock GLM-5.3-Flash, NVFP4 weight-only |
+| **Uncensored (abliterated)** | [drowzeys/keys-GLM-5.3-Flash-NVFP4-ablit-l15-45-anchorstock](https://huggingface.co/drowzeys/keys-GLM-5.3-Flash-NVFP4-ablit-l15-45-anchorstock) | abliterated (layers 15-45, anchor-stock), no refusals |
+
+Uncensored abliteration credit: [drowzeys/keys](https://github.com/drowzeys).
+
 Two firsts, as far as we can tell: the **first working GLM-5.3-Flash deployment on DGX Spark**
 (seven day-0 bugs deep — [docs/DEPLOY-REPORT.md](docs/DEPLOY-REPORT.md)), and the **first
 working DFlash2 deployment of this model on GB10** ([docs/DFLASH2-SPECULATIVE-DECODING.md](docs/DFLASH2-SPECULATIVE-DECODING.md)).
