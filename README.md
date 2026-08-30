@@ -2,8 +2,8 @@
 
 OpenAI-compatible vLLM serving of [zai-org/GLM-5.3-Flash](https://huggingface.co/zai-org/GLM-5.3-Flash)
 (320B total / 18B active MoE) across two DGX Spark (GB10, SM121) nodes at tensor-parallel 2,
-using the [LibertAIDAI/GLM-5.3-Flash-NVFP4](https://huggingface.co/LibertAIDAI/GLM-5.3-Flash-NVFP4)
-weight-only quant, **fp8 KV cache**, and the [`incoai/GLM-5.3-Flash-DFlash2`](https://huggingface.co/incoai/GLM-5.3-Flash-DFlash2)
+using the [RedHatAI/GLM-5.3-Flash-NVFP4](https://huggingface.co/RedHatAI/GLM-5.3-Flash-NVFP4)
+compressed-tensors quant (the corruption-free **default**, see below), **fp8 KV cache**, and the [`incoai/GLM-5.3-Flash-DFlash2`](https://huggingface.co/incoai/GLM-5.3-Flash-DFlash2)
 speculative drafter. 262,144-token context. Deployed the same day the model dropped.
 
 ---
@@ -29,7 +29,8 @@ Pick your weights: **same launcher, same recipe**, just point the model path at 
 
 | | HuggingFace | notes |
 |---|---|---|
-| **Censored** | [LibertAIDAI/GLM-5.3-Flash-NVFP4](https://huggingface.co/LibertAIDAI/GLM-5.3-Flash-NVFP4) | stock GLM-5.3-Flash, NVFP4 weight-only |
+| **⭐ Default (recommended)** | [RedHatAI/GLM-5.3-Flash-NVFP4](https://huggingface.co/RedHatAI/GLM-5.3-Flash-NVFP4) | **compressed-tensors, corruption-free** (see fix above) |
+| Censored (legacy) | [LibertAIDAI/GLM-5.3-Flash-NVFP4](https://huggingface.co/LibertAIDAI/GLM-5.3-Flash-NVFP4) | stock NVFP4 weight-only — ⚠️ ModelOpt token corruption |
 | **Uncensored (abliterated)** | [drowzeys/keys-GLM-5.3-Flash-NVFP4-ablit-l15-45-anchorstock](https://huggingface.co/drowzeys/keys-GLM-5.3-Flash-NVFP4-ablit-l15-45-anchorstock) | abliterated (layers 15-45, anchor-stock), no refusals |
 
 Uncensored abliteration credit: [drowzeys/keys](https://github.com/drowzeys).
@@ -61,7 +62,7 @@ docker tag ghcr.io/tonyd2wild/vllm-glm53-flash:sm121-v11-dflash2 radixark/vllm-g
 ```
 
 **2. Fetch the weights** to the same path on both nodes (or NFS-export from the head):
-[LibertAIDAI/GLM-5.3-Flash-NVFP4](https://huggingface.co/LibertAIDAI/GLM-5.3-Flash-NVFP4) →
+[RedHatAI/GLM-5.3-Flash-NVFP4](https://huggingface.co/RedHatAI/GLM-5.3-Flash-NVFP4) (default) →
 `/var/tmp/glm-5.3-flash-nvfp4`. For DFlash2, also fetch the drafter (2.2 GB) →
 `/var/tmp/models/GLM-5.3-Flash-DFlash2`.
 
@@ -364,7 +365,7 @@ refuse loudly.
 ## Credits
 
 - **Model**: [zai-org/GLM-5.3-Flash](https://huggingface.co/zai-org/GLM-5.3-Flash) ·
-  **Quant**: [LibertAIDAI/GLM-5.3-Flash-NVFP4](https://huggingface.co/LibertAIDAI/GLM-5.3-Flash-NVFP4)
+  **Quant**: [RedHatAI/GLM-5.3-Flash-NVFP4](https://huggingface.co/RedHatAI/GLM-5.3-Flash-NVFP4) (default, compressed-tensors)
   (their sm_121 notes were used directly) ·
   **Drafter**: [incoai/GLM-5.3-Flash-DFlash2](https://huggingface.co/incoai/GLM-5.3-Flash-DFlash2)
 - **barrydeen** — the gmu 0.85 reference config and quantization-coverage table from their
