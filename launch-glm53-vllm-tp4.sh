@@ -7,7 +7,7 @@ set -euo pipefail
 # Run cache_flusher.sh alongside on every node (GB10 NVRM allocator, see repo docs).
 NODE_RANK="${1:?usage: launch-glm53-vllm-tp4.sh <0|1|2|3>}"
 
-IMAGE="radixark/vllm-glm53-flash:sm121-v8"
+IMAGE="ghcr.io/tonyd2wild/vllm-glm53-flash:sm121-v8"
 NAME="vllm_glm53"
 MODEL_HOST_PATH="/var/tmp/glm-5.3-flash-nvfp4"
 MODEL_PATH="/models/glm-5.3-flash-nvfp4"
