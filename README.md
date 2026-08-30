@@ -57,8 +57,8 @@ They contain **only vLLM + our patches** — no model weights (those bind-mount 
 The launchers reference the local `radixark/…` tag names, so retag once:
 
 ```bash
-docker tag ghcr.io/tonyd2wild/vllm-glm53-flash:sm121-v8 radixark/vllm-glm53-flash:sm121-v8
-docker tag ghcr.io/tonyd2wild/vllm-glm53-flash:sm121-v11-dflash2 radixark/vllm-glm53-flash:sm121-v11-dflash2
+docker tag ghcr.io/tonyd2wild/vllm-glm53-flash:sm121-v8 ghcr.io/tonyd2wild/vllm-glm53-flash:sm121-v8
+docker tag ghcr.io/tonyd2wild/vllm-glm53-flash:sm121-v11-dflash2 ghcr.io/tonyd2wild/vllm-glm53-flash:sm121-v11-dflash2
 ```
 
 **2. Fetch the weights** to the same path on both nodes (or NFS-export from the head):
@@ -120,9 +120,9 @@ The base is the public day-0 image:
 docker pull vllm/vllm-openai:glm53-flash-arm64-cu130     # or -x86_64- for x86
 cd docker
 for i in $(seq 1 9); do
-  docker build -f "Dockerfile.glm53-sm121-v$i" -t "radixark/vllm-glm53-flash:sm121-v$i" . || break
+  docker build -f "Dockerfile.glm53-sm121-v$i" -t "ghcr.io/tonyd2wild/vllm-glm53-flash:sm121-v$i" . || break
 done
-docker save radixark/vllm-glm53-flash:sm121-v8 | ssh <worker> docker load
+docker save ghcr.io/tonyd2wild/vllm-glm53-flash:sm121-v8 | ssh <worker> docker load
 ```
 
 The chain is mostly linear (v1→v3→v4→…→v9); **v2 is an optional NaN-debug branch off v1** that nothing else builds on. For DFlash2, build
