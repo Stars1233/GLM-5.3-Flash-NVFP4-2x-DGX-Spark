@@ -70,11 +70,12 @@ is fatal. Fixes now in `speed-night-2026-09-18/tp2-exp.sh`:
 - `nvidia-smi -r` on a GB10 followed by CUDA work without a reboot faulted the GPU (SMMU
   timeouts). Don't.
 
-## 4. Numbers (clamped fleet, temperature 0, median of reps; sweep = peak of rounds)
+## 4. Numbers
 
-See `speed-night-2026-09-18/LOG.md` for the full table. Final combined config, both lanes:
-
-_(filled in at 09:30)_
+Deliberately not reproduced here. The night's tok/s figures are in
+`speed-night-2026-09-18/LOG.md` (banner at the top) and `results/*-CLAMPED.json`, for relative
+comparison only. The clock-independent measurements — prefix-cache hits and TTFT ratio, KV pool
+tokens, boot times — are in §1. Real before/after numbers get added after step 1–2 of §5.
 
 ## 5. What to do next (in order)
 

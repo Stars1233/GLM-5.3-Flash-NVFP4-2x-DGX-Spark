@@ -1,5 +1,10 @@
 # TP2 speed night — 2026-09-18 (02:30 → 10:00 EDT)
 
+> **DO NOT QUOTE THE tok/s NUMBERS IN THIS FILE.** 3 of 4 GPUs were power-clamped at ~14 W
+> (~2.5× slow) from 03:10 on. This is the lab notebook of the night; the numbers are only good
+> for A-vs-B *relative* comparisons taken the same hour. Real numbers come after the power
+> cycle described in docs/SPEED-NIGHT-2026-09-18.md.
+
 **Goal:** faster GLM-5.3-Flash on 2× DGX Spark (TP2): TTFT, prefill, decode, aggregate C1–C6, KV pool.
 **Weights:** `nvidia/GLM-5.3-Flash-NVFP4` (ModelOpt, `ALLOW_MODELOPT`-class build) — the RedHat
 compressed-tensors copy was not on the fleet tonight. **Every number in this file is on the nvidia
