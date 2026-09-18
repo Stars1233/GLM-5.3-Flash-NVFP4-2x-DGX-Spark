@@ -47,6 +47,7 @@ else
   GRAPH_ARGS="--compilation-config {\"cudagraph_mode\":\"${CUDAGRAPH_MODE:-FULL_AND_PIECEWISE}\"}"
 fi
 KV_ARGS=""; [ "$KV_MEM" != "0" ] && KV_ARGS="--kv-cache-memory $KV_MEM"
+MM_LIMIT="${MM_LIMIT:-{\"image\":2,\"video\":0}}"
 
 # #18 prefix-cache repair for the drafter group, bind-mounted onto v11 (no rebuild)
 PREFIX_MOUNT=""
@@ -55,28 +56,57 @@ if [ "${PREFIX_FIX:-0}" = "1" ]; then
   PREFIX_MOUNT="-v $HOME/patches/kv_cache_coordinator.py:/usr/local/lib/python3.12/dist-packages/vllm/v1/core/kv_cache_coordinator.py:ro"
 fi
 
+# b12x RoCEnante one-shot RoCE all-reduce (port of the DS4 lane's sr2roce patch set to this
+# vLLM tree; files staged in ~/patches/glm-roce by the 2026-09-18 feasibility study). ROCE=1
+# bind-mounts the b12x package + 5 patched vLLM files and turns the backend on. Rollback: ROCE=0.
+ROCE_MOUNTS=""; ROCE_ENV=""
+if [ "${ROCE:-0}" = "1" ]; then
+  R="$HOME/patches/glm-roce"; D=/usr/local/lib/python3.12/dist-packages
+  for f in b12x b12x-1.3.0.dist-info b12x_roce_all_reduce.py cuda_communicator.py parallel_state.py envs.py gpu_worker.py; do
+    test -e "$R/$f" || { echo "MISSING $R/$f" >&2; exit 3; }
+  done
+  ROCE_MOUNTS="-v $R/b12x:$D/b12x:ro -v $R/b12x-1.3.0.dist-info:$D/b12x-1.3.0.dist-info:ro -v $R/b12x-roce:/opt/b12x-roce:ro
+    -v $R/b12x_roce_all_reduce.py:$D/vllm/distributed/device_communicators/b12x_roce_all_reduce.py:ro
+    -v $R/cuda_communicator.py:$D/vllm/distributed/device_communicators/cuda_communicator.py:ro
+    -v $R/parallel_state.py:$D/vllm/distributed/parallel_state.py:ro
+    -v $R/envs.py:$D/vllm/envs.py:ro
+    -v $R/gpu_worker.py:$D/vllm/v1/worker/gpu_worker.py:ro"
+  ROCE_ENV="-e VLLM_ENABLE_ROCE_ALLREDUCE=1 -e VLLM_ROCE_ALLREDUCE_MAX_SIZE=${ROCE_AR_MAX:-2MB} -e VLLM_ROCE_ALLGATHER_MAX_SIZE=${ROCE_AG_MAX:-16MB} -e VLLM_ROCE_ALLGATHER_ENABLE=${ROCE_AG:-1} -e B12X_ROCE_HCA=rocep1s0f0 -e B12X_ROCE_GID_INDEX=${GID_INDEX:-3} -e B12X_ROCE_SPIN_LIMIT=300000000 -e B12X_ROCE_CACHE_DIR=/opt/b12x-roce/cache"
+fi
+
 test -f "$MODEL_HOST_PATH/config.json" || { echo "MISSING $MODEL_HOST_PATH/config.json" >&2; exit 3; }
 test -f "$MODEL_HOST_PATH/chat_template_mm.jinja" || { echo "MISSING chat_template_mm.jinja in $MODEL_HOST_PATH" >&2; exit 3; }
 test -f "$HOME/patches/sparse_attn_indexer_kpool.py" || { echo "MISSING ~/patches/sparse_attn_indexer_kpool.py" >&2; exit 3; }
 test -f "$DRAFTER/config.json" || { echo "MISSING drafter at $DRAFTER" >&2; exit 3; }
-mkdir -p "$CACHE_HOST_PATH"
+mkdir -p "$CACHE_HOST_PATH/flashinfer" "$CACHE_HOST_PATH/tilelang" "$CACHE_HOST_PATH/triton"
 docker rm -f "$NAME" 2>/dev/null || true
 
-echo "[$EXP_NAME] lane=$LANE rank=$NODE_RANK host=$HOST_IP model=$MODEL_HOST_PATH gmu=$GMU len=$MAXLEN seqs=$SEQS mnbt=$MNBT kv=$KV_MEM/$KV_DTYPE spec=$SPEC_JSON eager=$EAGER prefix_fix=${PREFIX_FIX:-0} nccl_extra='${NCCL_EXTRA:-}' extra='${VLLM_EXTRA:-}'"
+echo "[$EXP_NAME] lane=$LANE rank=$NODE_RANK host=$HOST_IP model=$MODEL_HOST_PATH gmu=$GMU len=$MAXLEN seqs=$SEQS mnbt=$MNBT kv=$KV_MEM/$KV_DTYPE spec=$SPEC_JSON eager=$EAGER prefix_fix=${PREFIX_FIX:-0} roce=${ROCE:-0} nccl_extra='${NCCL_EXTRA:-}' extra='${VLLM_EXTRA:-}'"
 
 docker run --gpus all -d \
   --name "$NAME" --restart no \
   --network host --ipc host --shm-size 32g \
+  `# cgroup cap (same as the DS4 + TP4 launchers): an overrun becomes a clean container OOM` \
+  `# instead of the host page-allocator livelock + watchdog reboot seen 2026-09-18 03:10.` \
+  --memory "${MEM_CAP:-112g}" --memory-swap "${MEM_CAP:-112g}" \
   --ulimit memlock=-1:-1 --cap-add IPC_LOCK \
   --device /dev/infiniband:/dev/infiniband \
   -v "$MODEL_HOST_PATH:$MODEL_PATH:ro" \
   -v "$CACHE_HOST_PATH:/cache" \
+  `# FlashInfer JIT output (fp4 CUTLASS GEMM variants, minutes each with MAX_JOBS=2) lives in` \
+  `# /root/.cache/flashinfer and would die with the container. Persist it on the host.` \
+  -v "$CACHE_HOST_PATH/flashinfer:/root/.cache/flashinfer" \
   -e VLLM_HOST_IP=$HOST_IP \
   -e VLLM_CACHE_ROOT=/cache/vllm-tp2-$EXP_NAME \
   -e HF_HOME=/cache/huggingface \
   -e HF_HUB_OFFLINE=1 -e TRANSFORMERS_OFFLINE=1 \
   -e VLLM_ENGINE_READY_TIMEOUT_S=3600 \
-  -e PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True \
+  `# JIT storm control: cicc invoked the OOM killer during profiling on 2026-09-18. Cap nvcc` \
+  `# parallelism and keep TileLang/Triton caches across experiments (they do not depend on` \
+  `# the serving knobs), so only the first boot pays the compile.` \
+  -e MAX_JOBS=${MAX_JOBS:-2} -e FLASHINFER_NVCC_THREADS=1 \
+  -e TILELANG_CACHE_DIR=/cache/tilelang -e TRITON_CACHE_DIR=/cache/triton \
+  -e PYTORCH_CUDA_ALLOC_CONF=${ALLOC_CONF:-expandable_segments:True} \
   -e TORCH_CUDA_ARCH_LIST=12.1a -e FLASHINFER_CUDA_ARCH_LIST=12.1a \
   -e FLASHINFER_DISABLE_VERSION_CHECK=1 \
   -e NCCL_NET=IB -e NCCL_IB_DISABLE=0 \
@@ -88,9 +118,9 @@ docker run --gpus all -d \
   -e NCCL_NVLS_ENABLE=0 -e NCCL_CROSS_NIC=0 -e NCCL_IB_MERGE_NICS=0 \
   -e NCCL_CUMEM_ENABLE=0 -e NCCL_IGNORE_CPU_AFFINITY=1 -e NCCL_DEBUG=WARN \
   -e TORCH_NCCL_ASYNC_ERROR_HANDLING=1 \
-  ${NCCL_EXTRA:-} \
+  ${NCCL_EXTRA:-} $ROCE_ENV \
   -v $HOME/patches/sparse_attn_indexer_kpool.py:/usr/local/lib/python3.12/dist-packages/vllm/model_executor/layers/sparse_attn_indexer_kpool.py:ro \
-  $PREFIX_MOUNT \
+  $PREFIX_MOUNT $ROCE_MOUNTS \
   -v "$DRAFTER:/models/dflash2-draft:ro" \
   "$IMAGE" \
     "$MODEL_PATH" \
@@ -107,6 +137,8 @@ docker run --gpus all -d \
     --tool-call-parser glm47 --enable-auto-tool-choice \
     --reasoning-parser glm45 --default-chat-template-kwargs '{"enable_thinking":false}' \
     --chat-template /models/glm-5.3-flash-nvfp4/chat_template_mm.jinja \
+    `# images stay on; video=0 skips the max-size video encoder profile (memory spike at boot)` \
+    --limit-mm-per-prompt "$MM_LIMIT" \
     --distributed-executor-backend mp \
     --nnodes 2 --node-rank "$NODE_RANK" \
     --master-addr "$HEAD_IP" --master-port "$MPORT" \

@@ -14,6 +14,49 @@ Sweep C1–C6 uses the 8 real prompts rotated (no counting). Prefill is cold (sa
 
 | # | time | lane | label | diff vs shipped | C1 | C2 | C4 | C6 | count100 | code | prose | json | math | verdict |
 |---|------|------|-------|-----------------|----|----|----|----|----------|------|-------|------|------|---------|
+| 1 | 04:58–05:39 | B | B0-baseline | none (shipped recipe, nvidia quant) | 25.3 | 32.6 | 41.0 | 34.6 | 39.0 | 26.9 | 10.9 | 24.1 | 28.3 | baseline, **clamped fleet**; sweep = peak of 3 (medians hit by JIT stalls) |
+| 2 | 05:17–06:07 | A | A0-baseline | none (shipped recipe, nvidia quant), full suite | 27.2 | 34.6 | 40.5 | 34.2 | 39.0 | 26.7 | 10.8 | 24.5 | 28.1 | baseline; cold prefill 685/721/709 tok/s @6K/30K/114K; longctx 114K C1 12.2 → C2 5.5 per-stream (#14 reproduces) |
 
 ## Findings / notes (append-only)
 
+- **03:10 incident — first boot wedged all four nodes.** Both lanes loaded weights (90.46 GiB/rank
+  on the nvidia quant, ~3 GiB more than RedHat) then hit the memory wall in the profiling pass:
+  Bluey's host OOM killer shot the worker (`cicc` — the CUDA JIT compiler — invoked it,
+  MemAvailable 4 GiB); Reddie/Spark4/Asusi went into a kernel page-allocator livelock and were
+  watchdog-rebooted (~5 min lost each, Asusi lost its manual NFS mounts). Fix in `tp2-exp.sh`:
+  `MAX_JOBS=2 FLASHINFER_NVCC_THREADS=1` (no nvcc storm during profiling), persistent
+  `TILELANG_CACHE_DIR`/`TRITON_CACHE_DIR` under /cache (only the first boot compiles),
+  `--limit-mm-per-prompt '{"image":2,"video":0}'` (skips the max-size video encoder profile),
+  and `--memory 112g --memory-swap 112g` so any future overrun is a clean container OOM, not a
+  reboot. Lesson for the repo: on TP2 the nvidia ModelOpt quant leaves ~27 GiB per node for
+  everything that is not weights; every knob that raises the profiling peak (seqs, mnbt, KV pin)
+  spends from that budget.
+- **03:59–04:15 — GPUs stuck at 611–721 MHz after the watchdog reboots.** First baselines on both
+  lanes came in at count100 38.5 / code 27.3 / prose 10.8 tok/s with acceptance normal (0.93 /
+  0.63 / 0.16), i.e. a flat ~195 ms/step against the ~78 ms/step the 09-02 recipe documents.
+  `nvidia-smi` on the three rebooted nodes: P0, no throttle reason, 611–721 MHz at 9–12 W under
+  load; Bluey (never rebooted, has `gb10-clock-cap.service`) at 2184 MHz. `-lgc 2200,2200` live
+  did nothing. RoCE was clean (200 Gb/s, GIDs right, NCCL traffic flowing), so it was the clock,
+  not the fabric. Fix: install the clock-cap unit on all four and **clean-reboot** the three
+  nodes; they came back idling at 305 MHz (the cap floor being honored = the driver is in
+  control again). Partial stuck-clock numbers kept as `B0-baseline-CLOCKSTUCK` for the record.
+  Lesson: after any unclean reset, check `nvidia-smi --query-gpu=clocks.sm` under load before
+  trusting a single number; 96% util at ~10 W is a spinning GPU, not a working one.
+- KV pool on the nvidia quant at the 6 GiB pin: **536,832 tokens** (233 × 2304), not the
+  678,661 CURRENT.md quotes for RedHat — the checkpoint's KV layout differs.
+- **04:30–04:50 — the clock is a power clamp, not a governor bug, and reboot does not clear
+  it.** Same 4096² bf16 matmul in a throwaway container: Bluey **64.8 TFLOPS / 115 GB/s at
+  2164 MHz, 60 W**; Asusi/Spark4/Reddie **26–33 TFLOPS / 50–80 GB/s at 611–890 MHz, ~14 W**.
+  After `nvidia-smi -r` the idle clock reads 2054 MHz and collapses to 611 the instant load
+  starts; `-lgc 3003,3003`, `-ac`, `-pl`, GPU reset, clean reboot: no effect. No thermal or
+  powercap sysfs, no throttle reason reported. A ~14 W ceiling on an otherwise healthy GPU
+  after a watchdog reset looks like the platform power budget (USB-C PD contract / EC) being
+  stuck at a fallback level; only an AC cycle is likely to clear it. **Everything measured
+  tonight is on a fleet with 3 of 4 GPUs at ~40% speed; only relative deltas are meaningful and
+  even those are compute-skewed. DS4, when restored at 10:00, will be slow too until the three
+  nodes are power-cycled.** Preflight added to the recommendation: run the matmul probe
+  (`speed-night-2026-09-18/gputest.sh`) on every node before trusting any number; < 50 TFLOPS
+  means a clamped GPU.
+- 04:46 — my clock experiment left a `docker run` hung on Spark4's GPU after `nvidia-smi -r`;
+  killing it faulted the GPU (SMMU CMD_SYNC timeouts, NVRM asserts) and cost a forced reboot.
+  Do not `nvidia-smi -r` a GB10 and then launch CUDA work on it without a reboot in between.

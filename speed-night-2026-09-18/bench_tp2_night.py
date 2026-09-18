@@ -182,6 +182,9 @@ def wave(jobs):
 def suite_sweep(levels, rounds):
     res = {}
     for c in levels:
+        # throwaway wave first: first-time shapes at each level JIT Triton/TileLang kernels
+        # mid-inference (18 s TTFT stalls seen at C2 on 2026-09-18) and would poison the median
+        wave([(f"[warm{c}-{i}] " + PROMPTS[REAL[i % len(REAL)]][0], 96, REAL[i % len(REAL)]) for i in range(c)])
         b = metrics(); aggs, per, ttfts, fails = [], [], [], 0
         for r in range(rounds):
             jobs = []
@@ -272,7 +275,13 @@ def main():
     out = {"label": a.label, "started": time.strftime("%Y-%m-%d %H:%M:%S"), "url": URL,
            "reps": a.reps, "rounds": a.rounds}
     print(f"== {a.label} @ {URL} ==", flush=True)
-    for _ in range(2): post_stream("Say hi.", 8)          # warm (JIT)
+    # warm-up per issue #21: cold TileLang/CuTe JIT mid-burst -> RPC timeout. 4 concurrent
+    # decodes + one 4K prefill + a count burst before anything is measured.
+    tw = time.perf_counter()
+    wave([(f"[warm{i}] " + PROMPTS["code"][0], 64, "code") for i in range(4)])
+    post_stream(filler(4096, "warm") + "\n\nReply with exactly: DONE", 8)
+    post_stream(COUNT_NUMS(40), 120)
+    print(f"  warm-up {time.perf_counter()-tw:.1f}s", flush=True)
     out["meta"] = suite_meta()
     if "single" in suites: print(" [single]", flush=True); out["single"] = suite_single(a.reps)
     if "sweep" in suites:
