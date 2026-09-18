@@ -16,6 +16,9 @@ Sweep C1–C6 uses the 8 real prompts rotated (no counting). Prefill is cold (sa
 |---|------|------|-------|-----------------|----|----|----|----|----------|------|-------|------|------|---------|
 | 1 | 04:58–05:39 | B | B0-baseline | none (shipped recipe, nvidia quant) | 25.3 | 32.6 | 41.0 | 34.6 | 39.0 | 26.9 | 10.9 | 24.1 | 28.3 | baseline, **clamped fleet**; sweep = peak of 3 (medians hit by JIT stalls) |
 | 2 | 05:17–06:07 | A | A0-baseline | none (shipped recipe, nvidia quant), full suite | 27.2 | 34.6 | 40.5 | 34.2 | 39.0 | 26.7 | 10.8 | 24.5 | 28.1 | baseline; cold prefill 685/721/709 tok/s @6K/30K/114K; longctx 114K C1 12.2 → C2 5.5 per-stream (#14 reproduces) |
+| 3 | 05:57–06:41 | B | B1-roce | **ROCE=1** (b12x RoCEnante one-shot all-reduce, ported from the DS4 lane, bind-mount only) | 27.8 | 38.5 | 45.5 | 38.8 | 38.5 | 27.4 | 11.1 | 25.2 | 26.8 | boots, engages (`RoCEnante all-reduce is live: 393216 bytes`), stable through full bench. Single stream flat (compute-clamped fleet hides it); aggregate peaks +5–18% at every level vs B0. Keep. |
+| 4 | 07:01–07:37 | B | B2-roce-k5 | ROCE=1 + **k=5** | 27.0 | 29.9 | 39.9 | 37.8 | 29.5 | 23.3 | 10.7 | 20.6 | 23.7 | k=5 loses every single-stream prompt (−15…−24%) and is flat at C4–C6 vs B1. **k=7 stays.** Acceptance ratio rises (0.73 vs 0.64 code) while mean accepted length falls (4.66 vs 5.47) — ratio is the wrong metric, length tracks throughput. |
+| 5 | 07:11–07:47 | A | A1b-seqs32 | **seqs 6→32** (mnbt 8192) | 24.9 | 31.2 | 34.5 | 30.1 | – | – | – | – | – | sweep to C16: C8 31.5 / C12 **37.4** / C16 32.7 peak, but TTFT p90 60 / 99 / 179 s. On the clamped fleet batching only stretches the step; +10% aggregate at C12 is not worth the queueing. **Retest after power cycle** (TP4 saw +175% from the same knob with compute headroom). |
 
 ## Findings / notes (append-only)
 
@@ -60,3 +63,11 @@ Sweep C1–C6 uses the 8 real prompts rotated (no counting). Prefill is cold (sa
 - 04:46 — my clock experiment left a `docker run` hung on Spark4's GPU after `nvidia-smi -r`;
   killing it faulted the GPU (SMMU CMD_SYNC timeouts, NVRM asserts) and cost a forced reboot.
   Do not `nvidia-smi -r` a GB10 and then launch CUDA work on it without a reboot in between.
+- **06:36 — A1 (seqs 32 + mnbt 16384) died: `NVRM: NV_ERR_NO_MEMORY` on both nodes in the same
+  second, at the first real traffic after boot.** Root cause in the log: with `--kv-cache-memory`
+  pinned, this vLLM **skips memory profiling** ("reserved 6.0 GiB ... skipped memory profiling.
+  This does not respect gpu_memory_utilization"), so nothing checks that the activation peak of
+  a bigger `max-num-batched-tokens` fits in the ~16 GiB left after 90.5 GiB weights + 6 GiB KV.
+  **mnbt 16384 does not fit TP2 on this quant.** Retrying seqs 32 at mnbt 8192. Also switched
+  the per-launch threshold flusher (expired after 25 min, 1 min before the death) for an
+  unconditional 20 s flusher that lives as long as the container (`flusher_lane.sh`).
