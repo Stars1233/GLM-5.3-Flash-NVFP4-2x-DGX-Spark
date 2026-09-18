@@ -1,10 +1,14 @@
 # GLM-5.3-Flash NVFP4 + DFlash2 on 2x NVIDIA DGX Spark
 
-OpenAI-compatible vLLM serving of [zai-org/GLM-5.3-Flash](https://huggingface.co/zai-org/GLM-5.3-Flash)
-(320B total / 18B active MoE) across two DGX Spark (GB10, SM121) nodes at tensor-parallel 2,
-using the [RedHatAI/GLM-5.3-Flash-NVFP4](https://huggingface.co/RedHatAI/GLM-5.3-Flash-NVFP4)
-compressed-tensors quant (the corruption-free **default**, see below), **fp8 KV cache**, and the [`incoai/GLM-5.3-Flash-DFlash2`](https://huggingface.co/incoai/GLM-5.3-Flash-DFlash2)
-speculative drafter. 262,144-token context. Deployed the same day the model dropped.
+[zai-org/GLM-5.3-Flash](https://huggingface.co/zai-org/GLM-5.3-Flash) (320B total / 18B active MoE) served by vLLM at **tensor-parallel 2 across two DGX Spark** (GB10/SM121), **262,144-token context**, fp8 KV, DFlash2 speculative drafter.
+
+**Current recipe: [CURRENT.md](CURRENT.md).** Read that first, it is the one configuration this repo ships, and it wins over anything below that disagrees.
+
+One launcher: [`launch-glm53-vllm-tp2-dflash2.sh`](launch-glm53-vllm-tp2-dflash2.sh), **worker Spark4 (rank 1) FIRST, then head Reddie (rank 0)**, which serves :8000.
+
+Weights: [RedHatAI/GLM-5.3-Flash-NVFP4](https://huggingface.co/RedHatAI/GLM-5.3-Flash-NVFP4) (compressed-tensors) at `/var/tmp/models/GLM-5.3-Flash-NVFP4-redhat`, ModelOpt and abliterated NVFP4 quants corrupt tokens on this stack and the launcher refuses them.
+
+Everything else here is reference: the bring-up log, the day-0 bug receipts, the benchmark history, and the open problems.
 
 ---
 
@@ -54,17 +58,14 @@ docker pull ghcr.io/tonyd2wild/vllm-glm53-flash:sm121-v8            # base, fp8 
 ```
 
 They contain **only vLLM + our patches** — no model weights (those bind-mount at runtime).
-The launchers reference the local `radixark/…` tag names, so retag once:
-
-```bash
-docker tag ghcr.io/tonyd2wild/vllm-glm53-flash:sm121-v8 ghcr.io/tonyd2wild/vllm-glm53-flash:sm121-v8
-docker tag ghcr.io/tonyd2wild/vllm-glm53-flash:sm121-v11-dflash2 ghcr.io/tonyd2wild/vllm-glm53-flash:sm121-v11-dflash2
-```
+No retag step: the launchers reference these `ghcr.io/tonyd2wild/…` tags directly. (Only the
+`docker/` build chain uses local `radixark/…` stage tags, and those never leave the build.)
 
 **2. Fetch the weights** to the same path on both nodes (or NFS-export from the head):
 [RedHatAI/GLM-5.3-Flash-NVFP4](https://huggingface.co/RedHatAI/GLM-5.3-Flash-NVFP4) (default) →
-`/var/tmp/glm-5.3-flash-nvfp4`. For DFlash2, also fetch the drafter (2.2 GB) →
-`/var/tmp/models/GLM-5.3-Flash-DFlash2`.
+`/var/tmp/models/GLM-5.3-Flash-NVFP4-redhat`, this is the path the launcher checks
+(`MODEL_HOST_PATH`); override with `MODEL_HOST_PATH=…` if you keep weights elsewhere. For
+DFlash2, also fetch the drafter (2.2 GB) → `/var/tmp/models/GLM-5.3-Flash-DFlash2`.
 
 **3. Install the SM121 top-k fix** on **both** nodes. Both published images still contain a
 decode-time top-k kernel that hard-kills the engine on any decode past ~24K context on GB10
@@ -128,10 +129,11 @@ docker save ghcr.io/tonyd2wild/vllm-glm53-flash:sm121-v8 | ssh <worker> docker l
 The chain is mostly linear (v1→v3→v4→…→v9); **v2 is an optional NaN-debug branch off v1** that nothing else builds on. For DFlash2, build
 [`overlay-dflash2/`](overlay-dflash2/) on top of v8 afterwards.
 
-> **Known issue:** on `main` the `FROM` lines of v2–v6 still reference the original ad-hoc tag
-> names (`sm121-nope-mla`, `sm121-fi618`, `sm121-fi618-nccl`, `sm121-final`) rather than
-> `sm121-v1…v5`, so the loop above only works after [#5](../../pull/5) (thanks @ozskywalker)
-> lands. Until then, tag each stage with the name the next Dockerfile expects.
+> **Resolved.** The `FROM` lines of v2–v6 once referenced the original ad-hoc tag names
+> (`sm121-nope-mla`, `sm121-fi618`, `sm121-fi618-nccl`, `sm121-final`) rather than
+> `sm121-v1…v5`, so the loop above did not work. [#5](../../pull/5) (thanks @ozskywalker)
+> normalized the chain to v-numbered tags and added `docker/build.sh`; no manual retagging
+> between stages is needed.
 
 Published image digests, so you can tell whether a local build differs:
 `sm121-v8` → `sha256:d77d375c742fc54f436dec5108b440f58f021bc6600052bf0e8fe5840357e78f` ·
@@ -153,7 +155,7 @@ harness is [`probes/bench_c1c6.py`](probes/bench_c1c6.py), run as:
 |---|---|
 | Single-stream decode, code prompt, warm | **46.9 tok/s** at 74.1 % draft acceptance |
 | Single-stream decode, structured output | **54–61 tok/s** (temp 0, 3 runs) |
-| KV pool | **581,040 tokens** @ 262K context, profiler-sized (see the ceiling section) |
+| KV pool | **678,661 tokens** @ 262K context at the shipped 6 GiB pin (PR #16; 581,040 under profiler sizing before it, see the ceiling section) |
 | Context | 262,144 |
 | KV cost of the drafter | **zero** — it slot-shares the MLA tensors |
 | Boot | ~15 min (shard load dominates) |
@@ -182,9 +184,23 @@ lives in the high-acceptance zone. Detail and how to read these:
 
 ### KV pool ceiling on TP2 (2026-08-28)
 
+> **Superseded 2026-09-02, the shipped launcher now pins `--kv-cache-memory 6442450944`
+> (6 GiB).** The guidance below ("let the profiler size the pool, never pin") was written
+> before we measured what the profiler-sized pool costs under load: at the 3 GiB pin
+> @tmooch measured 6 preemptions under load and 0 at 6 GiB, with the pool going
+> **310,292 → 678,661 tokens**. Preemption under load costs more than any tok/s figure and
+> the memory is available, so 6 GiB was adopted as the default in
+> [#16](../../pull/16). Measurement and reasoning:
+> [docs/TP2-SPEC-DEPTH-AND-KV-2026-09-02.md](docs/TP2-SPEC-DEPTH-AND-KV-2026-09-02.md).
+> The sharp edge below is still real, a pin removes the activation reservation, which is
+> why the shipped pin is a *measured* one, validated under load, not a guess. Do not raise
+> it without repeating that measurement.
+
+The original 2026-08-28 finding, kept because the mechanism still matters:
+
 **Let vLLM's profiler size the pool. Do not pin `--kv-cache-memory`.**
 
-That is the entire lesson, and it cost us a night of boots to learn. When you pass
+That was the lesson at the time, and it cost us a night of boots to learn. When you pass
 `--kv-cache-memory`, vLLM still runs the profile pass but **never subtracts the measured
 activation peak** (`gpu_worker.py:475-495`) — it hands you exactly the number you asked
 for and `--gpu-memory-utilization` becomes dead. Allocation succeeds, warmup succeeds, a
@@ -236,12 +252,41 @@ point. It does not recover on its own.
 - **`enable_thinking: false` is also the faster setting** (+8 % acceptance) — reasoning traces
   are higher-entropy and draft worse. Caveat: with thinking off GLM emits untagged
   reasoning-prose into `content`, which some agent harnesses mis-parse; see the deploy report.
-- **K=7 is optimal, don't sweep it.** Conditional per-position acceptance is nearly flat
-  (0.93/0.89/0.84/0.81/0.79/0.59/0.94), so the last position still earns; the drafter's
-  `block_size: 8` caps K at 7 anyway. A lower K gives a prettier *ratio* and worse throughput.
+- **K=7 is the default, but it is a workload choice, it was swept.** Conditional per-position
+  acceptance is nearly flat (0.93/0.89/0.84/0.81/0.79/0.59/0.94), so the last position still
+  earns; the drafter's `block_size: 8` caps K at 7 anyway, and a lower K gives a prettier
+  *ratio* and worse throughput on a single stream. **But the sweep on 2026-09-02
+  ([docs/TP2-SPEC-DEPTH-AND-KV-2026-09-02.md](docs/TP2-SPEC-DEPTH-AND-KV-2026-09-02.md),
+  "Speculative depth: k=7 below C4, k=5 above it") found it inverts under concurrency**, 
+  k=5 beats k=7 by +29.9% at C4 and +18.3% at C6, while losing on every single-stream prompt.
+  That doc's result, quoted: "`num_speculative_tokens` is a **workload choice, not a
+  default.** It inverts at C4… **The default stays k=7** (single-user and low-concurrency is
+  the common case, and it is what the README's headline figures use). Serving deep
+  concurrency should set k=5, or better, use a schedule with the crossover at C4:
+  `"num_speculative_tokens_per_batch_size": [[1,3,7],[4,512,5]]`"
+  A second independent pair (#21, 2026-09-16) re-measured after the prefix-cache repair and found the
+  acceptance regime had moved (per-position ~100/97/96/91/90%, mean 4.75/5): k=7 beat k=5 by +19% on
+  structured single-stream, was flat on prose, and lost 9% at C6. Same conclusion from the other
+  direction: k is a workload choice, and the crossover sits around C4-C6.
 - **Prefix cache now hits with DFlash2** once the overlay includes `patch_prefix_cache_draft_group.py` (#13). Agent sessions stop re-prefilling the whole conversation each turn: repeated 262K prompt, 0.986 hit rate, warm TTFT 3 s vs 192 s cold. See [PREFIX-CACHE-DFLASH2-SM121](docs/PREFIX-CACHE-DFLASH2-SM121.md).
 
 ---
+
+- **Multi-user long context: keep `--max-num-seqs 1` until #14 is closed.** Two concurrent
+  ~114K-token requests collapse decode to ~2 tok/s each on some TP2 pairs (#14, reproduced on
+  a 4 GiB / 414K-token KV pin in #19, so it is not KV-pool exhaustion). The leading
+  explanation is the DSA indexer: no varlen path off SM100, so each draft token costs one
+  full-context indexer row per sequence. A lower k shrinks exactly that cost, which is the
+  other reason long-context agent traffic wants k below 7. Single-user long context and
+  multi-user short prompts are unaffected.
+- **Pin the drafter revision.** `incoai/GLM-5.3-Flash-DFlash2` has shipped different bytes
+  under the same tag (#7: `model.safetensors` sha256 `b33c0347...` vs `8931dc52...`, pulled
+  days apart). Two pairs on the same recipe measured 0.73 acceptance and one measured 0.35,
+  with that hash mismatch sitting right there. If acceptance is far below the numbers in
+  [Results](#results-tp2-2026-08-28), re-pull the drafter by explicit revision before
+  touching anything in the image chain, and run the count-to-100 probe at temperature 0
+  (`Count from 1 to 100. Output only the numbers, one per line, nothing else.`): a healthy
+  engine returns ~0.9 acceptance on it regardless of workload.
 
 ## Status: work in progress
 
@@ -324,6 +369,14 @@ Blackwell part. Upstream-ready issue drafts with receipts:
   `chat_template_kwargs: {"enable_thinking": false}`.
 
 ---
+
+- **Do not benchmark on a fresh boot; warm the batch shapes first (#21).** The first
+  concurrent burst after a cold start can trigger a TileLang JIT compile mid-batch
+  (`mhc_pre_big_fuse_with_norm_tilelang` in the log at the exact moment of the burst); the
+  worker RPC stalls cross-rank and the engine dies with `TimeoutError: RPC call to
+  sample_tokens timed out` then `EngineDeadError`. Send a few small concurrent requests
+  (4 x 32-token generations) before any real load. `fleet_watchdog.sh` recovers the pair, but
+  the bench you were running is gone.
 
 ## Deeper reading
 
