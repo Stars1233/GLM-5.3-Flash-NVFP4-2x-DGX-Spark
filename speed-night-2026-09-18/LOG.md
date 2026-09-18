@@ -19,6 +19,8 @@ Sweep C1–C6 uses the 8 real prompts rotated (no counting). Prefill is cold (sa
 | 3 | 05:57–06:41 | B | B1-roce | **ROCE=1** (b12x RoCEnante one-shot all-reduce, ported from the DS4 lane, bind-mount only) | 27.8 | 38.5 | 45.5 | 38.8 | 38.5 | 27.4 | 11.1 | 25.2 | 26.8 | boots, engages (`RoCEnante all-reduce is live: 393216 bytes`), stable through full bench. Single stream flat (compute-clamped fleet hides it); aggregate peaks +5–18% at every level vs B0. Keep. |
 | 4 | 07:01–07:37 | B | B2-roce-k5 | ROCE=1 + **k=5** | 27.0 | 29.9 | 39.9 | 37.8 | 29.5 | 23.3 | 10.7 | 20.6 | 23.7 | k=5 loses every single-stream prompt (−15…−24%) and is flat at C4–C6 vs B1. **k=7 stays.** Acceptance ratio rises (0.73 vs 0.64 code) while mean accepted length falls (4.66 vs 5.47) — ratio is the wrong metric, length tracks throughput. |
 | 5 | 07:11–07:47 | A | A1b-seqs32 | **seqs 6→32** (mnbt 8192) | 24.9 | 31.2 | 34.5 | 30.1 | – | – | – | – | – | sweep to C16: C8 31.5 / C12 **37.4** / C16 32.7 peak, but TTFT p90 60 / 99 / 179 s. On the clamped fleet batching only stretches the step; +10% aggregate at C12 is not worth the queueing. **Retest after power cycle** (TP4 saw +175% from the same knob with compute headroom). |
+| 6 | 08:15–08:45 | A | A2-prefix-kv8 | **PREFIX_FIX=1 KV_MEM=8 GiB** (seqs 6, mnbt 8192) | 26.9 | 28.4 | 32.5 | 32.2 | 40.5* | 26.2 | 10.8 | 22.4* | 27.2 | prefix cache hits +9216 on a 13K repeat, TTFT −70%; KV pool 714,240 (+33%). *count100/json medians contaminated by the concurrent prefix probe (peak shown). Sweep slightly under A0 (noise-level, 2 rounds). |
+| 7 | 08:19–08:47 | B | B3-roce-dynk | ROCE=1 + **dynamic k** `[[1,3,7],[4,512,5]]` | 26.8 | 31.0 | 39.4 | 35.5 | 37.7 | 27.6 | 11.6 | 28.0 | 28.0 | single stream = k7 (as designed); C4–C6 peaks a little under static k7+RoCE (B1: 45.5/48.8/38.8). No benefit shown; **not adopted**. |
 
 ## Findings / notes (append-only)
 
@@ -71,3 +73,10 @@ Sweep C1–C6 uses the 8 real prompts rotated (no counting). Prefill is cold (sa
   **mnbt 16384 does not fit TP2 on this quant.** Retrying seqs 32 at mnbt 8192. Also switched
   the per-launch threshold flusher (expired after 25 min, 1 min before the death) for an
   unconditional 20 s flusher that lives as long as the container (`flusher_lane.sh`).
+- **08:15 — A2: #18 prefix-cache fix + KV 8 GiB, both good.** `kv_cache_coordinator.py` from
+  `patch_prefix_cache_draft_group.py` applied inside the v11 image (self-check OK, md5
+  `317934d8…`) and bind-mounted: a 13,263-token prompt sent three times → hits **+0 / +9216 /
+  +9216** (two full 4608-token blocks; the engine pads the attention block to 4608 for mamba
+  page alignment, so prompts under 4608 tokens never hit — my first 4263-token probe showed +0
+  for that reason, not a bug), TTFT **21.1 s → 6.3 s (−70%)**. KV pin 6 → 8 GiB: pool
+  **536,832 → 714,240 tokens (+33%)**, booted clean with mnbt 8192, no NVRM pressure.

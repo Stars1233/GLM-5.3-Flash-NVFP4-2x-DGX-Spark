@@ -37,6 +37,10 @@ MODEL_HOST_PATH="${MODEL_HOST_PATH:-$DEF_MODEL}"
 # shipped-recipe defaults
 GMU="${GMU:-0.85}"; MAXLEN="${MAXLEN:-262144}"; SEQS="${SEQS:-6}"; MNBT="${MNBT:-8192}"
 KV_MEM="${KV_MEM:-6442450944}"; KV_DTYPE="${KV_DTYPE:-fp8_e4m3}"; SPEC_K="${SPEC_K:-7}"
+# DYNK=1: the k7-below-C4 / k5-above schedule from docs/TP2-SPEC-DEPTH-AND-KV-2026-09-02.md
+if [ "${DYNK:-0}" = "1" ] && [ -z "${SPEC_JSON:-}" ]; then
+  SPEC_JSON='{"method":"dflash","model":"/models/dflash2-draft","num_speculative_tokens":7,"num_speculative_tokens_per_batch_size":[[1,3,7],[4,512,5]]}'
+fi
 if [ -z "${SPEC_JSON:-}" ]; then
   SPEC_JSON="{\"method\":\"dflash\",\"model\":\"/models/dflash2-draft\",\"num_speculative_tokens\":${SPEC_K}}"
 fi
