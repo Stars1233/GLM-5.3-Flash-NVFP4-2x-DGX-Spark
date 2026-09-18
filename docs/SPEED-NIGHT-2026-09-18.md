@@ -16,11 +16,9 @@ only an AC power cycle is likely to fix it.
 
 Consequences:
 
-- **Every absolute number below is ~2.5× slower than this hardware does** (count-to-100
-  came in at 39 tok/s where the 09-02 recipe measures 67). Only *relative* deltas mean
-  anything, and those are skewed toward "compute-bound".
-- The DeepSeek lane restored at 10:00 is slow for the same reason until Reddie, Spark4 and
-  Asusi are power-cycled.
+- Every number measured before 09:20 (everything in `speed-night-2026-09-18/LOG.md` and the
+  `*-CLAMPED.json` files) is ~2.5× slower than this hardware does; §4 has the healthy-fleet
+  before/after taken after Tony's power cycle.
 - **Before trusting any number from this fleet, run
   `speed-night-2026-09-18/gputest.sh` on every node.** Under 50 TFLOPS is a clamped GPU.
 
@@ -70,12 +68,45 @@ is fatal. Fixes now in `speed-night-2026-09-18/tp2-exp.sh`:
 - `nvidia-smi -r` on a GB10 followed by CUDA work without a reboot faulted the GPU (SMMU
   timeouts). Don't.
 
-## 4. Numbers
+## 4. Numbers — healthy fleet (after the 09:20 power cycle)
 
-Deliberately not reproduced here. The night's tok/s figures are in
-`speed-night-2026-09-18/LOG.md` (banner at the top) and `results/*-CLAMPED.json`, for relative
-comparison only. The clock-independent measurements — prefix-cache hits and TTFT ratio, KV pool
-tokens, boot times — are in §1. Real before/after numbers get added after step 1–2 of §5.
+Same nvidia weights, same harness, both lanes benchmarked in the same hour: lane A = final
+config (`ROCE=1 PREFIX_FIX=1 KV_MEM=8589934592`), lane B = shipped recipe. Temperature 0,
+median of 3 reps; sweep = median / peak of 3 rounds, mixed real prompts (no counting).
+GPUs verified first: 81.5 / 79.5 / 80.4 TFLOPS on the three power-cycled nodes.
+
+**Aggregate tok/s, C1–C6**
+
+| | C1 | C2 | C3 | C4 | C5 | C6 |
+|---|---|---|---|---|---|---|
+| baseline | 43.4 / 44.5 | 29.0 / 49.7 | 30.2 / 51.1 | 50.3 / 64.5 | 44.4 / 62.0 | 47.8 / 48.9 |
+| final | 42.7 / 46.1 | 33.8 / 52.0 | 35.9 / 57.7 | 59.0 / 60.5 | 40.9 / 66.3 | 51.6 / 65.8 |
+| Δ median | −2% | +17% | +19% | +17% | −8% | +8% |
+
+**Cold prefill (salted prompts, TTFT → tok/s)**
+
+| prompt | baseline | final | Δ |
+|---|---|---|---|
+| 5,942 tok | 4.98 s → 1,192 | 3.95 s → 1,506 | +26% |
+| 29,868 tok | 31.4 s → 952 | 24.1 s → 1,242 | +30% |
+| 113,910 tok | 115.8 s → 984 | 85.3 s → 1,336 | +36% |
+
+**Single stream decode tok/s (median)**
+
+| | count100 | count300 | code | json | sql | tooluse | math | prose | narrative | summary |
+|---|---|---|---|---|---|---|---|---|---|---|
+| baseline | 67.0 | 51.4 | 41.8 | 39.5 | 39.5 | 47.2 | 43.7 | 16.7 | 17.0 | 19.1 |
+| final | 61.3* | 57.7 | 44.7 | 42.8 | 39.6 | 47.7 | 46.2 | 18.1 | 17.9 | 20.9 |
+
+\*lane A's count100 ran while lane B was still streaming weights over the fabric; its peak was 65.5.
+
+**Other:** 114K-token long context C1 21.1 → 19.1 tok/s, C2 8.5 → 9.2 per stream (issue #14
+unchanged). KV pool 536,832 → 714,240 tokens. 13K-token repeat TTFT 21.1 s → 6.3 s (#18).
+
+**Headline: prefill +26–36%, aggregate +8–19% at C2–C4 and C6, single-stream decode
+unchanged (flat to +8%).** The decode step itself was not touched tonight; that is the next
+target (adaptive verification length and FP8 dense projections — the attention/KDA projections
+in the nvidia checkpoint are bf16, 132 modules excluded from NVFP4).
 
 ## 5. What to do next (in order)
 

@@ -3,7 +3,7 @@
 The one configuration this repo ships today. If anything else in the repo disagrees with
 this file, this file wins.
 
-Last verified: 2026-09-02 (numbers). Launcher updated 2026-09-18 (speed night, [docs/SPEED-NIGHT-2026-09-18.md](docs/SPEED-NIGHT-2026-09-18.md)) — **the 09-18 measurements were taken on a power-clamped fleet and are not the numbers to quote**; re-verify after the power cycle described there.
+Last verified: 2026-09-02 (numbers). Launcher updated 2026-09-18 (speed night, [docs/SPEED-NIGHT-2026-09-18.md](docs/SPEED-NIGHT-2026-09-18.md)) — healthy-fleet before/after in §4 of that doc: prefill +26–36%, aggregate +8–19% at C2–C4/C6, single-stream decode unchanged.
 
 ---
 
