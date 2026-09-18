@@ -3,7 +3,7 @@
 The one configuration this repo ships today. If anything else in the repo disagrees with
 this file, this file wins.
 
-Last verified: 2026-09-02.
+Last verified: 2026-09-02 (numbers). Launcher updated 2026-09-18 (speed night, [docs/SPEED-NIGHT-2026-09-18.md](docs/SPEED-NIGHT-2026-09-18.md)) — healthy-fleet before/after in §4 of that doc: prefill +26–36%, aggregate +8–19% at C2–C4/C6, single-stream decode unchanged.
 
 ---
 
@@ -81,7 +81,7 @@ The drafter, also on both nodes: `/var/tmp/models/GLM-5.3-Flash-DFlash2` (2.2 GB
 | `--max-model-len` | `262144` | 1M starved the pool and crashed 3× on 2026-09-01 |
 | `--speculative-config` | `{"method":"dflash","model":"/models/dflash2-draft","num_speculative_tokens":7}` | DFlash2, **k=7** |
 | `--kv-cache-dtype` | `fp8_e4m3` | |
-| `--kv-cache-memory` | `6442450944` (**6 GiB, pinned**) | see below |
+| `--kv-cache-memory` | `8589934592` (**8 GiB, pinned**; was 6 GiB until 2026-09-18) | see below |
 | `--enforce-eager` | on | see below |
 | `--gpu-memory-utilization` | `0.85` | 0.78–0.80 starve KV; 0.87 is not reachable on every node |
 | `--block-size` | `2304` | DeepGEMM arch-12 fp8 paged-MQA needs 64-entry pool pages |
@@ -90,9 +90,21 @@ The drafter, also on both nodes: `/var/tmp/models/GLM-5.3-Flash-DFlash2` (2.2 GB
 | `--max-num-batched-tokens` | `8192` | |
 | `--chat-template` | `chat_template_mm.jinja` (from the weights dir) | vision; image requests 500 without it |
 | `--served-model-name` | `glm-5.3-flash` | |
+| `--limit-mm-per-prompt` | `{"image":2,"video":0}` | images on; skips the max-size video encoder profile at boot (2026-09-18 memory incident) |
+| `--memory 112g --memory-swap 112g` (docker) | | an overrun is a clean container OOM, not a node reboot |
+| `MAX_JOBS=2 FLASHINFER_NVCC_THREADS=1` + persistent `/cache/{tilelang,triton}` and `/root/.cache/flashinfer` | | no nvcc storm during the post-load profile; kernels compile once |
+| `PREFIX_FIX` (default on when `~/patches/kv_cache_coordinator.py` exists) | #18 repair bind-mounted onto v11 | 13K-token repeat TTFT 21.1 s → 6.3 s |
+| `ROCE` (default on when `~/patches/glm-roce/` exists) | b12x RoCEnante one-shot RoCE all-reduce | aggregate +5–18% at C1–C6 on 09-18; build with `speed-night-2026-09-18/roce/build-roce-bundle.sh` |
 | tool/reasoning | `--tool-call-parser glm47 --enable-auto-tool-choice --reasoning-parser glm45 --default-chat-template-kwargs '{"enable_thinking":false}'` | |
 
-### KV **is** pinned at 6 GiB
+### KV **is** pinned — at 8 GiB since 2026-09-18
+
+8 GiB measured on the nvidia quant on 2026-09-18: pool **714,240 tokens** (6 GiB gave 536,832 on
+that checkpoint), booted clean at mnbt 8192. Note that with the pin **this vLLM skips memory
+profiling**, so nothing validates the activation peak of a bigger `--max-num-batched-tokens`:
+16384 died with `NVRM: NV_ERR_NO_MEMORY` on both nodes. Keep mnbt at 8192 on TP2.
+
+The 6 GiB history:
 
 This reverses earlier README guidance ("let the profiler size the pool, do not pin
 `--kv-cache-memory`"). The shipped launcher pins **6442450944 bytes**. Rationale and
@@ -201,6 +213,8 @@ Still current: `docs/TP2-SPEC-DEPTH-AND-KV-2026-09-02.md`,
 `probes/bench_robust.py`, and the probe kit.
 
 <!-- launcher hashes, maintained by tools/check-current.sh --write -->
-sha256 5b3713873a92e6b86ab73f4a34942fc4429ee728d9d36add703fe7508ff43895  launch-glm53-vllm-tp2-dflash2.sh
+
+<!-- launcher hashes, maintained by tools/check-current.sh --write -->
+sha256 e75b98d6c4770e2558d87990126eaae6bf36e9948c6be4cdc67eb015024ba591  launch-glm53-vllm-tp2-dflash2.sh
 sha256 9e0ca234ece25786c9109fe9b3121e0ba024b32a741fb9cd7feb6861a6f76df6  launch-glm53-vllm-tp2.sh
 sha256 5d1fedd3b586819668d8f6f6759d2483fbd785aadad2a25139cbf90639c27929  launch-glm53-vllm-tp4.sh
