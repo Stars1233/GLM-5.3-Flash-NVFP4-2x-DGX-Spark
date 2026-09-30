@@ -31,7 +31,8 @@ ranks, and resize memory:
 | `GLM_PREFILL_SHARD=0` (and `_PAD=0`) | mHC prefill sharding hard-codes `TP = 4` and **refuses to boot** on any other layout |
 | `PF3_ARM=off` | routed-MoE prefill kernels tuned on TP4 shapes |
 | `GATHER_ROUTE=0` | the NCCL route for prefill-shard row gathers; nothing to route with sharding off |
-| `KV_BYTES=4294967296` (4 GiB/rank) | see memory, below |
+| `KV_BYTES=6442450944` (6 GiB/rank) | see memory, below |
+| `MM_IMAGES=2`, `MM_CACHE_GB=1` | smaller image-encoder budget, to make room for the KV pin |
 | `CAPTURE_SIZES` to 128 rows, `CAPTURE_MAX=128` | graphs above 128 rows only serve 28+ concurrent requests |
 | `MAX_MODEL_LEN=262144` | this repo's TP2 context |
 
@@ -44,19 +45,25 @@ head, draft truncation, device-side draft-length selection, FP8 drafter, RoCE on
 FlashKDA (self-test PASS at 32 heads per rank). His dense-kernel and Marlin tune tables are keyed to TP4 shapes;
 entries that do not match fall back to stock, which is why the TP2 prefill is not faster than knapcio's TP4 per GPU.
 
-## Memory: why 4 GiB of KV, not his 24
+## Memory: 6 GiB of KV (default), not his 24
 
 Each node holds half the model: **87.2 GiB of weights per rank** plus 1.3 GiB of drafter. His TP4 profile pins
-24 GiB of KV per rank, which cannot fit. Our first boot used 8 GiB of KV and graphs up to 256 rows: it came up
-healthy, but every node sat at **1 to 2 GiB free at idle**, too thin to push a 114K-token prefill through without
-risking the host-OOM wedge these nodes are prone to. 4 GiB of KV and graphs to 128 rows leaves **3 to 7 GiB free**,
-the same margin the previous TP2 recipe benchmarked with. We also tried **7 GiB** (with the image budget cut to 2 per
-prompt): it booted with a 654,157-token pool and 2 GiB free on each head, then a 110K-token prompt drove both heads to
-0 GiB free and one logged 15 `NV_ERR_NO_MEMORY` allocation failures. No crash, no reboot, but it does not fit. The KV pool is **372,773 tokens**: one full 262K request
-plus room for short ones.
+24 GiB of KV per rank, which cannot fit. What we tried, all on 2026-09-29:
 
-With `--kv-cache-memory-bytes` pinned, vLLM skips memory profiling, so nothing checks this for you. Watch
-`MemAvailable` on both nodes on the first boot.
+| KV pin per rank | KV pool | free memory, tightest node | result |
+|---|---|---|---|
+| 8 GiB, graphs to 256 rows | 745,547 tokens | 1 to 2 GiB at idle | booted; too thin to load-test |
+| 7 GiB (+ image budget trimmed) | 654,157 tokens | 2 GiB idle, **0** under a 110K prompt | **ran out of GPU memory** (`NV_ERR_NO_MEMORY`), no crash |
+| **6 GiB (+ image budget trimmed), default** | **560,362 tokens** | 4 to 5 GiB idle, 1 to 2 GiB under load | passes one 111K prompt (3/3 needles), two concurrent 114K prompts, the full suite |
+| 4 GiB | 372,773 tokens | 3 to 7 GiB idle, 3 GiB under load | passes everything; 13 to 17% faster prefill than 6 GiB |
+
+6 GiB fits two full 262K requests at once. The price is headroom: prefill is 13 to 17% slower than at 4 GiB, and on
+lane A (whose head also serves the weights to its worker over NFS) concurrency at C3 to C6 and 114K-token decode are
+slower too (README, "6 GiB (default) or 4 GiB"). Set `KV_BYTES=4294967296` for the 4 GiB config.
+
+The trimmed image budget is `MM_IMAGES=2`, `MM_CACHE_GB=1` (his profile: 16 images, 4 GB). With
+`--kv-cache-memory-bytes` pinned, vLLM skips memory profiling, so nothing checks any of this for you: watch
+`MemAvailable` on both nodes on the first boot and on the first long prompt.
 
 ## Launch a lane (from its head)
 
@@ -85,5 +92,5 @@ off switch. Changing the default needs a restart.
 | `start_tp2.sh` | his `start.sh` @770d115, 2 ranks / 2 nodes |
 | `env.tp2-low`, `env.tp2-high` | lane A and lane B |
 | `bench/bench_tp2_night.py` | the speed-night harness, with `--effort` and time-to-answer / thinking-length metrics |
-| `results/` | raw JSON of both lanes |
+| `results/` | raw JSON of both lanes, at the 6 GiB default (`-kv6`) and the 4 GiB option (`-kv4`) |
 | `charts/` | the README charts (no dependencies), light and dark |

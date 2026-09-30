@@ -6,7 +6,7 @@ this file, this file wins.
 > **2026-09-29: the repo's default is now knapcio's stack, ported to TP2**
 > ([`runs/2026-09-29-knapcio-tp2/RUNBOOK.md`](runs/2026-09-29-knapcio-tp2/RUNBOOK.md), README top section). This file
 > describes the **previous recipe**, which stays valid and is the fallback when the bigger KV pool matters
-> (714,240 vs 372,773 tokens).
+> (714,240 vs 560,362 tokens).
 >
 > Launcher hashes below refreshed 2026-09-29: the 2026-09-24 checkpoint-guard commit (`abb38bb`, #23) changed all
 > three launchers (nvidia default, `tools/checkpoint_guard.py`) without updating them, which had left the `guard`

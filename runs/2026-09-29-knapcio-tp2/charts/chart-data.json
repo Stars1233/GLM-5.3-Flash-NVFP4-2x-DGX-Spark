@@ -18,15 +18,15 @@
   "old_label": "previous TP2 recipe",
   "new": [
    96.4,
-   92.9,
-   100.3,
-   64.6,
+   93.0,
+   101.1,
+   65.4,
+   68.9,
    71.0,
-   71.3,
-   61.7,
-   42.1,
-   35.6,
-   35.4
+   60.3,
+   41.8,
+   35.3,
+   35.3
   ],
   "old": [
    61.3,
@@ -43,16 +43,16 @@
   "delta": [
    "+57%",
    "+61%",
-   "+110%",
-   "+40%",
-   "+59%",
-   "+67%",
-   "+56%",
-   "+101%",
-   "+97%",
-   "+98%"
+   "+112%",
+   "+42%",
+   "+54%",
+   "+66%",
+   "+52%",
+   "+100%",
+   "+95%",
+   "+97%"
   ],
-  "note": "Same fleet, harness and nvidia weights; previous recipe measured 2026-09-18, knapcio 2026-09-29. Temp 0, low effort, median of 3. * counting = ceiling."
+  "note": "Same fleet, harness and nvidia weights; previous recipe 2026-09-18, knapcio 2026-09-29 (6 GiB KV, thinking low). Temp 0, median of 3. * counting = ceiling."
  },
  "tp2sweep": {
   "kind": "sweep",
@@ -69,12 +69,12 @@
    [
     "knapcio stack (TP2 port)",
     [
-     70.0,
-     83.5,
-     91.8,
-     91.5,
-     97.2,
-     77.8
+     67.3,
+     84.0,
+     73.4,
+     72.1,
+     81.9,
+     65.7
     ]
    ],
    [
@@ -89,33 +89,33 @@
     ]
    ]
   ],
-  "note": "8 prompt types rotated across streams (no counting). Previous recipe 2026-09-18, knapcio 2026-09-29, same harness."
+  "note": "8 prompt types rotated across streams (no counting). knapcio lane A, 6 GiB KV, thinking low. Previous recipe 2026-09-18, same harness."
  },
  "tp2prefill": {
   "kind": "prefill",
   "title": "Cold prefill, TP2 (tok/s)",
   "cats": [
    "5,944-token prompt",
-   "29,868-token prompt",
+   "29,867-token prompt",
    "113,911-token prompt"
   ],
   "new_label": "knapcio stack (TP2 port)",
   "old_label": "previous TP2 recipe",
   "new": [
-   1288,
-   1455,
-   1479
+   1121,
+   1200,
+   1225
   ],
   "old": [
    1506,
    1242,
    1336
   ],
-  "note": "Salted prompts, 1 output token. knapcio's prefill speedups (mHC sharding, PF3 kernels) are TP4-only and off at TP2.",
+  "note": "Salted prompts, 1 output token, 6 GiB KV. knapcio's prefill speedups are TP4-only and off at TP2; the 4 GiB pin prefills 13-17% faster.",
   "delta": [
-   "-14%",
-   "+17%",
-   "+11%"
+   "-26%",
+   "-3%",
+   "-8%"
   ]
  }
 }

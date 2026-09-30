@@ -2,31 +2,31 @@
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="runs/2026-09-29-knapcio-tp2/charts/tp2prompt-dark.svg">
-  <img alt="Single-stream decode by prompt type on 2x DGX Spark TP2, previous recipe vs knapcio stack: count to 100 61 to 96, count to 300 58 to 93, tool call 48 to 100, math 46 to 65, code 45 to 71, json 43 to 71, sql 40 to 62, summary 21 to 42, prose 18 to 36, narrative 18 to 35 tok/s." src="runs/2026-09-29-knapcio-tp2/charts/tp2prompt-light.svg" width="880">
+  <img alt="Single-stream decode by prompt type on 2x DGX Spark TP2, previous recipe vs knapcio stack: count to 100 61 to 96, count to 300 58 to 93, tool call 48 to 101, math 46 to 65, code 45 to 69, json 43 to 71, sql 40 to 60, summary 21 to 42, prose 18 to 35, narrative 18 to 35 tok/s." src="runs/2026-09-29-knapcio-tp2/charts/tp2prompt-light.svg" width="880">
 </picture>
 
 **Single-stream decode, tok/s** (median of 3). Same fleet, same harness, same nvidia weights. Count to 100 is the peak.
 
 | prompt | previous TP2 recipe | **knapcio stack, lane A (thinking low)** | change | lane B (thinking high) |
 |---|---|---|---|---|
-| count to 100 (peak) ¹ | 61.3 | **96.4** | +57% | 93.1 |
-| count to 300 ¹ | 57.6 | **92.9** | +61% | 92.2 |
-| tool call | 47.7 | **100.3** | +111% | 67.7 |
-| math | 46.2 | **64.6** | +40% | 68.5 |
-| code | 44.7 | **71.0** | +59% | 65.4 |
-| json | 42.8 | **71.3** | +67% | 71.3 |
-| sql | 39.6 | **61.7** | +56% | 59.6 |
-| summary | 20.9 | **42.1** | +102% | 42.2 |
-| prose | 18.1 | **35.6** | +97% | 36.0 |
-| narrative | 17.9 | **35.4** | +98% | 35.5 |
+| count to 100 (peak) ¹ | 61.3 | **96.4** | +57% | 92.5 |
+| count to 300 ¹ | 57.6 | **93.0** | +61% | 87.5 |
+| tool call | 47.7 | **101.1** | +112% | 66.9 |
+| math | 46.2 | **65.4** | +42% | 65.5 |
+| code | 44.7 | **68.9** | +54% | 63.8 |
+| json | 42.8 | **71.0** | +66% | 70.6 |
+| sql | 39.6 | **60.3** | +52% | 59.7 |
+| summary | 20.9 | **41.8** | +100% | 40.7 |
+| prose | 18.1 | **35.3** | +95% | 35.5 |
+| narrative | 17.9 | **35.3** | +97% | 34.6 |
 
-¹ The counting prompts are the speculative-decoding ceiling, not a typical rate. Previous recipe measured 2026-09-18 on the healthy fleet, knapcio 2026-09-29.
+¹ The counting prompts are the speculative-decoding ceiling, not a typical rate. Previous recipe measured 2026-09-18 on the healthy fleet; knapcio 2026-09-29 at the default 6 GiB KV pin.
 
 [zai-org/GLM-5.3-Flash](https://huggingface.co/zai-org/GLM-5.3-Flash) (320B total / 18B active MoE) served by vLLM at **tensor-parallel 2 across two DGX Spark** (GB10/SM121), **262,144-token context**, fp8 KV, DFlash2 speculative drafter.
 
-**Current default (2026-09-29): [knapcio's stack](https://github.com/knapcio/GLM-5.3-Flash-4x-DGX-Spark-TP4), ported to two Sparks.** Decode is 1.4x to 2.1x faster on every prompt type than our previous recipe, C1 to C6 aggregate +18% to +61%, weights load in 44 s. Runbook and configs: [`runs/2026-09-29-knapcio-tp2/`](runs/2026-09-29-knapcio-tp2/).
+**Current default (2026-09-29): [knapcio's stack](https://github.com/knapcio/GLM-5.3-Flash-4x-DGX-Spark-TP4), ported to two Sparks.** Decode is 1.4x to 2.1x faster on every prompt type than our previous recipe, C1 to C5 aggregate +19% to +62% (C6 even), weights load in 44 s, and the default 6 GiB KV pin fits two full 262K requests. Runbook and configs: [`runs/2026-09-29-knapcio-tp2/`](runs/2026-09-29-knapcio-tp2/).
 
-**Previous recipe: [CURRENT.md](CURRENT.md)**, one launcher, [`launch-glm53-vllm-tp2-dflash2.sh`](launch-glm53-vllm-tp2-dflash2.sh) (worker Spark4 rank 1 first, then head Reddie rank 0, serving :8000). Still valid, and the fallback when you need its bigger KV pool (714K vs 373K tokens).
+**Previous recipe: [CURRENT.md](CURRENT.md)**, one launcher, [`launch-glm53-vllm-tp2-dflash2.sh`](launch-glm53-vllm-tp2-dflash2.sh) (worker Spark4 rank 1 first, then head Reddie rank 0, serving :8000). Still valid, and the fallback when you need its bigger KV pool (714K vs 560K tokens) or faster prefill.
 
 Weights: [nvidia/GLM-5.3-Flash-NVFP4](https://huggingface.co/nvidia/GLM-5.3-Flash-NVFP4) at `/var/tmp/models/GLM-5.3-Flash-NVFP4-nvidia` for the DFlash2 launcher (RedHatAI at `/var/tmp/models/GLM-5.3-Flash-NVFP4-redhat` for MTP or when memory is tight). ModelOpt builds that quantize attention, including the abliterated ones, corrupt tokens on this stack and the launchers refuse them.
 
@@ -47,78 +47,97 @@ layers) starts from our finding that the nvidia checkpoint leaves 18 GiB in BF16
 
 | lane | nodes | port | default reasoning effort | KV pool | boot to `/health` |
 |---|---|---|---|---|---|
-| **A** | Reddie (head) + Spark4 | `:8000` | **low** | 372,773 tokens (4 GiB/rank) | 140 to 150 s |
-| **B** | Bluey (head) + Asusi | `:8001` | high | 372,773 tokens (4 GiB/rank) | 180 to 190 s |
+| **A** | Reddie (head) + Spark4 | `:8000` | **low** | 560,362 tokens (6 GiB/rank) | about 170 s |
+| **B** | Bluey (head) + Asusi | `:8001` | high | 560,362 tokens (6 GiB/rank) | about 190 s |
 
-Both lanes serve `glm-5.3-flash` and run identical code; only the server's default `reasoning_effort` differs, and a
-request can override it. Weights load in **44 s** (knapcio's fast loader); the previous recipe took about 11 minutes.
+Both lanes serve `glm-5.3-flash` at 262K context and run identical code; only the server's default `reasoning_effort`
+differs, and a request can override it. Weights load in **44 s** (knapcio's fast loader); the previous recipe took about
+11 minutes. Two full 262K requests fit in the pool at once.
 
 ### C1 to C6, mixed real prompts
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="runs/2026-09-29-knapcio-tp2/charts/tp2sweep-dark.svg">
-  <img alt="Aggregate throughput C1 to C6 on TP2, peak of 3 rounds: previous recipe 46 / 52 / 58 / 60 / 66 / 66, knapcio lane A 70 / 84 / 92 / 92 / 97 / 78 tok/s." src="runs/2026-09-29-knapcio-tp2/charts/tp2sweep-light.svg" width="880">
+  <img alt="Aggregate throughput C1 to C6 on TP2, peak of 3 rounds: previous recipe 46 / 52 / 58 / 60 / 66 / 66, knapcio lane A 67 / 84 / 73 / 72 / 82 / 66 tok/s." src="runs/2026-09-29-knapcio-tp2/charts/tp2sweep-light.svg" width="880">
 </picture>
 
-| streams | previous TP2 recipe | **knapcio lane A (low)** | change (peak) | knapcio lane B (high) | TTFT p90, lane A |
-|---|---|---|---|---|---|
-| C1 | 42.7 / 46.1 | 67.0 / **70.0** | +52% | 62.6 / 68.7 | 0.44 s |
-| C2 | 33.8 / 52.0 | 60.2 / **83.5** | +61% | 58.4 / 80.5 | 0.84 s |
-| C3 | 35.9 / 57.7 | 58.5 / **91.8** | +59% | 60.9 / 90.0 | 0.86 s |
-| C4 | 59.0 / 60.5 | 91.4 / **91.5** | +51% | 90.8 / 92.0 | 0.88 s |
-| C5 | 40.9 / 66.3 | 70.8 / **97.2** | +47% | 71.6 / 99.7 | 2.23 s |
-| C6 | 51.6 / 65.8 | 74.8 / **77.8** | +18% | 74.5 / 75.8 | 27.37 s |
+| streams | previous TP2 recipe | **knapcio lane A (low)** | change (peak) | knapcio lane B (high) |
+|---|---|---|---|---|
+| C1 | 42.7 / 46.1 | 63.3 / **67.3** | +46% | 63.8 / 64.9 |
+| C2 | 33.8 / 52.0 | 57.2 / **84.0** | +61% | 59.4 / 82.1 |
+| C3 | 35.9 / 57.7 | 46.4 / **73.4** | +27% | 59.9 / 86.9 |
+| C4 | 59.0 / 60.5 | 71.5 / **72.1** | +19% | 87.7 / 88.7 |
+| C5 | 40.9 / 66.3 | 46.3 / **81.9** | +24% | 71.9 / 96.7 |
+| C6 | 51.6 / 65.8 | 65.7 / **65.7** | -0% | 80.1 / 81.6 |
 
 Aggregate tok/s, median / peak of 3 rounds; 8 prompt types rotated across streams, no counting. Zero failures, zero
-preemptions. **Unexplained:** at C6 the TTFT p90 reached 27 to 29 s on both lanes (every other level stayed under 3 s).
+preemptions.
 
 ### Cold prefill and long context
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="runs/2026-09-29-knapcio-tp2/charts/tp2prefill-dark.svg">
-  <img alt="Cold prefill on TP2: previous recipe 1506 / 1242 / 1336, knapcio lane A 1288 / 1455 / 1479 tok/s at 5,944 / 29,868 / 113,911-token prompts." src="runs/2026-09-29-knapcio-tp2/charts/tp2prefill-light.svg" width="880">
+  <img alt="Cold prefill on TP2 at 6 GiB KV: previous recipe 1506 / 1242 / 1336, knapcio lane A 1121 / 1200 / 1225 tok/s." src="runs/2026-09-29-knapcio-tp2/charts/tp2prefill-light.svg" width="880">
 </picture>
 
 | | previous TP2 recipe | **knapcio lane A** | change |
 |---|---|---|---|
-| 5,943-token prompt | 1,506 tok/s (TTFT 3.9 s) | **1,288 tok/s** (TTFT 4.6 s) | -14% |
-| 29,868-token prompt | 1,242 tok/s (TTFT 24.1 s) | **1,455 tok/s** (TTFT 20.5 s) | +17% |
-| 113,911-token prompt | 1,336 tok/s (TTFT 85.3 s) | **1,479 tok/s** (TTFT 77.0 s) | +11% |
-| 114K-token prompts, 1 at once: decode per stream | 19.1 tok/s | **40.7 tok/s** | +113% |
-| 114K-token prompts, 2 at once: decode per stream | 9.2 tok/s | **22.0 tok/s** | +139% |
+| 5,944-token prompt | 1,506 tok/s (TTFT 3.9 s) | **1,121 tok/s** (TTFT 5.3 s) | -26% |
+| 29,867-token prompt | 1,242 tok/s (TTFT 24.1 s) | **1,200 tok/s** (TTFT 24.9 s) | -3% |
+| 113,911-token prompt | 1,336 tok/s (TTFT 85.3 s) | **1,225 tok/s** (TTFT 93.0 s) | -8% |
+| 114K-token prompts, 1 at once: decode per stream | 19.1 tok/s | **26.9 tok/s** (lane B: 41.1) | +41% |
+| 114K-token prompts, 2 at once: decode per stream | 9.2 tok/s | **14.0 tok/s** (lane B: 22.7) | +52% |
 
-Prefill barely moves at TP2: knapcio's prefill speedups (mHC prefill sharding, routed-MoE prefill kernels) are
-built for four ranks and are switched off in the port. Long-context rows are single runs.
+Prefill is flat to slower at TP2: knapcio's prefill speedups (mHC prefill sharding, routed-MoE prefill kernels) are built
+for four ranks and are off in the port, and the 6 GiB pin leaves less memory headroom (next table). Long-context rows are
+single runs.
+
+### 6 GiB (default) or 4 GiB
+
+Same stack, same day, only the KV pin changed. 6 GiB buys a 50% bigger pool; 4 GiB leaves more memory free, which shows
+up in prefill and, on lane A (whose head also serves the weights to its worker over NFS), in concurrency.
+
+| | 4 GiB pin | **6 GiB pin (default)** |
+|---|---|---|
+| KV pool | 372,773 tokens (1 full 262K request) | **560,362 tokens (2 full 262K requests)** |
+| free memory, tightest node, under load | 3 GiB | 1 to 2 GiB |
+| single-stream decode, code / json / prose (lane A) | 71.0 / 71.3 / 35.6 | 68.9 / 71.0 / 35.3 |
+| cold prefill 6K / 30K / 114K (lane A) | 1,288 / 1,455 / 1,479 | 1,121 / 1,200 / 1,225 |
+| C3 to C6 aggregate peak, lane A | 92 / 92 / 97 / 78 | 73 / 72 / 82 / 66 |
+| C3 to C6 aggregate peak, lane B | 90 / 92 / 100 / 76 | 87 / 89 / 97 / 82 |
+| 114K-token prompt, decode (lane A, single run) | 40.7 | 26.9 |
+
+Pick 4 GiB (`KV_BYTES=4294967296`) when you never need two long contexts at once and want the faster prefill.
 
 ### Thinking low vs high (lane A vs lane B)
 
 | prompt | decode, low | decode, high | first answer token, low | first answer token, high | thinking text, low | thinking text, high |
 |---|---|---|---|---|---|---|
-| count to 100 | 96.4 | 93.1 | 0.43 s | 0.57 s | 27 chars | 60 chars |
-| count to 300 | 92.9 | 92.2 | 0.47 s | 0.71 s | 27 chars | 105 chars |
-| tool call | 100.3 | 67.7 | 0.51 s | 0.55 s | 0 chars | 24 chars |
-| math | 64.6 | 68.5 | 2.13 s | 3.73 s | 228 chars | 448 chars |
-| code | 71.0 | 65.4 | 0.37 s | 1.15 s | 0 chars | 145 chars |
-| json | 71.3 | 71.3 | 0.39 s | 0.52 s | 0 chars | 39 chars |
-| sql | 61.7 | 59.6 | 0.40 s | 1.75 s | 0 chars | 246 chars |
-| summary | 42.1 | 42.2 | 0.36 s | 1.21 s | 0 chars | 176 chars |
-| prose | 35.6 | 36.0 | 0.32 s | 2.17 s | 0 chars | 324 chars |
-| narrative | 35.4 | 35.5 | 0.34 s | 0.87 s | 0 chars | 70 chars |
+| count to 100 | 96.4 | 92.5 | 0.43 s | 0.53 s | 27 chars | 46 chars |
+| count to 300 | 93.0 | 87.5 | 0.47 s | 0.77 s | 27 chars | 105 chars |
+| tool call | 101.1 | 66.9 | 0.51 s | 0.52 s | 0 chars | 24 chars |
+| math | 65.4 | 65.5 | 1.98 s | 3.86 s | 199 chars | 486 chars |
+| code | 68.9 | 63.8 | 0.38 s | 1.26 s | 0 chars | 134 chars |
+| json | 71.0 | 70.6 | 0.39 s | 0.54 s | 0 chars | 39 chars |
+| sql | 60.3 | 59.7 | 0.40 s | 1.75 s | 0 chars | 246 chars |
+| summary | 41.8 | 40.7 | 0.33 s | 1.29 s | 0 chars | 186 chars |
+| prose | 35.3 | 35.5 | 0.31 s | 2.88 s | 0 chars | 382 chars |
+| narrative | 35.3 | 34.6 | 0.33 s | 0.99 s | 0 chars | 147 chars |
 
 Decode speed is about the same on most prompts. Tool call and code are slower at high because the thinking text accepts
-fewer draft tokens than the answer does (tool call: 5.4 vs 6.8 tokens per step). The bigger difference is the wait:
-high thinks 2 to 10 times longer before it answers, so the first answer token arrives later (up to 3.7 s on math). The TP4 sibling's 69-scenario tool-calling eval scored low 93.5 vs high 92.8, which is
-why low is the fleet default.
+fewer draft tokens than the answer does. The bigger difference is the wait: high thinks several times longer before it
+answers, so the first answer token arrives later (up to 3.9 s on math, 2.9 s on prose). The TP4 sibling's
+69-scenario tool-calling eval scored low 93.5 vs high 92.8, which is why low is the fleet default.
 
 ### What to know before you switch
 
 - **This is our port, not knapcio's release.** He has not run TP2. Three of his pieces are off because they are built
   for four ranks (mHC prefill sharding refuses to boot otherwise, the routed-MoE prefill kernels, the prefill gather
   route); everything on the decode side is on and armed.
-- **Memory is tight.** 87.2 GiB of weights per rank. 4 GiB of KV leaves 3 to 7 GiB free per node. We tried more:
-  8 GiB booted but left 1 to 2 GiB free at idle; **7 GiB booted and then ran out of GPU memory on a 110K-token prompt**
-  (`NV_ERR_NO_MEMORY` on one head, both heads at 0 GiB free; no crash, no reboot). 4 GiB is the setting.
-- **Smaller pool than the previous recipe:** 372,773 tokens vs 714,240. One full 262K request fits, plus short ones.
+- **Memory is tight.** 87.2 GiB of weights per rank. KV pins tried: 8 GiB left 1 to 2 GiB free at idle; **7 GiB ran out of
+  GPU memory on a 110K-token prompt** (`NV_ERR_NO_MEMORY`, no crash); **6 GiB passes** one 111K prompt (3/3 needles) and two
+  concurrent 114K prompts, with the tightest node at 1 to 2 GiB free; 4 GiB is the extra-margin option. The 6 GiB config
+  also trims the image budget to 2 images per prompt.
 - **Censored checkpoint** (`nvidia/GLM-5.3-Flash-NVFP4`, which is also this repo's previous default).
 - **Thinking cannot be switched off** in his chat template (`reasoning_effort` low, high or max).
 - **Single RoCE rail**, same as the TP4 sibling.

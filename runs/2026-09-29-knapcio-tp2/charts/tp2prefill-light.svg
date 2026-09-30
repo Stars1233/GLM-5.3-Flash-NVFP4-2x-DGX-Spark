@@ -17,21 +17,21 @@
 <text x="56.0" y="94.0" font-family="system-ui,-apple-system,Segoe UI,sans-serif" font-size="10" fill="#898781" text-anchor="end" font-weight="normal">2,000</text>
 <path d="M140.3,260.0 V136.0 Q140.3,132.0 144.3,132.0 H192.3 Q196.3,132.0 196.3,136.0 V260.0 Z" fill="#eb6834"/>
 <text x="168.3" y="126.0" font-family="system-ui,-apple-system,Segoe UI,sans-serif" font-size="11" fill="#0b0b0b" text-anchor="middle" font-weight="normal">1,506</text>
-<path d="M198.3,260.0 V154.5 Q198.3,150.5 202.3,150.5 H250.3 Q254.3,150.5 254.3,154.5 V260.0 Z" fill="#2a78d6"/>
-<text x="226.3" y="144.5" font-family="system-ui,-apple-system,Segoe UI,sans-serif" font-size="11" fill="#0b0b0b" text-anchor="middle" font-weight="600">1,288</text>
+<path d="M198.3,260.0 V168.7 Q198.3,164.7 202.3,164.7 H250.3 Q254.3,164.7 254.3,168.7 V260.0 Z" fill="#2a78d6"/>
+<text x="226.3" y="158.7" font-family="system-ui,-apple-system,Segoe UI,sans-serif" font-size="11" fill="#0b0b0b" text-anchor="middle" font-weight="600">1,121</text>
 <text x="197.3" y="278.0" font-family="system-ui,-apple-system,Segoe UI,sans-serif" font-size="11" fill="#52514e" text-anchor="middle" font-weight="normal">5,944-token prompt</text>
-<text x="197.3" y="294.0" font-family="system-ui,-apple-system,Segoe UI,sans-serif" font-size="11" fill="#0b0b0b" text-anchor="middle" font-weight="600">-14%</text>
+<text x="197.3" y="294.0" font-family="system-ui,-apple-system,Segoe UI,sans-serif" font-size="11" fill="#0b0b0b" text-anchor="middle" font-weight="600">-26%</text>
 <path d="M407.0,260.0 V158.4 Q407.0,154.4 411.0,154.4 H459.0 Q463.0,154.4 463.0,158.4 V260.0 Z" fill="#eb6834"/>
 <text x="435.0" y="148.4" font-family="system-ui,-apple-system,Segoe UI,sans-serif" font-size="11" fill="#0b0b0b" text-anchor="middle" font-weight="normal">1,242</text>
-<path d="M465.0,260.0 V140.3 Q465.0,136.3 469.0,136.3 H517.0 Q521.0,136.3 521.0,140.3 V260.0 Z" fill="#2a78d6"/>
-<text x="493.0" y="130.3" font-family="system-ui,-apple-system,Segoe UI,sans-serif" font-size="11" fill="#0b0b0b" text-anchor="middle" font-weight="600">1,455</text>
-<text x="464.0" y="278.0" font-family="system-ui,-apple-system,Segoe UI,sans-serif" font-size="11" fill="#52514e" text-anchor="middle" font-weight="normal">29,868-token prompt</text>
-<text x="464.0" y="294.0" font-family="system-ui,-apple-system,Segoe UI,sans-serif" font-size="11" fill="#0b0b0b" text-anchor="middle" font-weight="600">+17%</text>
+<path d="M465.0,260.0 V162.0 Q465.0,158.0 469.0,158.0 H517.0 Q521.0,158.0 521.0,162.0 V260.0 Z" fill="#2a78d6"/>
+<text x="493.0" y="152.0" font-family="system-ui,-apple-system,Segoe UI,sans-serif" font-size="11" fill="#0b0b0b" text-anchor="middle" font-weight="600">1,200</text>
+<text x="464.0" y="278.0" font-family="system-ui,-apple-system,Segoe UI,sans-serif" font-size="11" fill="#52514e" text-anchor="middle" font-weight="normal">29,867-token prompt</text>
+<text x="464.0" y="294.0" font-family="system-ui,-apple-system,Segoe UI,sans-serif" font-size="11" fill="#0b0b0b" text-anchor="middle" font-weight="600">-3%</text>
 <path d="M673.7,260.0 V150.4 Q673.7,146.4 677.7,146.4 H725.7 Q729.7,146.4 729.7,150.4 V260.0 Z" fill="#eb6834"/>
 <text x="701.7" y="140.4" font-family="system-ui,-apple-system,Segoe UI,sans-serif" font-size="11" fill="#0b0b0b" text-anchor="middle" font-weight="normal">1,336</text>
-<path d="M731.7,260.0 V138.3 Q731.7,134.3 735.7,134.3 H783.7 Q787.7,134.3 787.7,138.3 V260.0 Z" fill="#2a78d6"/>
-<text x="759.7" y="128.3" font-family="system-ui,-apple-system,Segoe UI,sans-serif" font-size="11" fill="#0b0b0b" text-anchor="middle" font-weight="600">1,479</text>
+<path d="M731.7,260.0 V159.9 Q731.7,155.9 735.7,155.9 H783.7 Q787.7,155.9 787.7,159.9 V260.0 Z" fill="#2a78d6"/>
+<text x="759.7" y="149.9" font-family="system-ui,-apple-system,Segoe UI,sans-serif" font-size="11" fill="#0b0b0b" text-anchor="middle" font-weight="600">1,225</text>
 <text x="730.7" y="278.0" font-family="system-ui,-apple-system,Segoe UI,sans-serif" font-size="11" fill="#52514e" text-anchor="middle" font-weight="normal">113,911-token prompt</text>
-<text x="730.7" y="294.0" font-family="system-ui,-apple-system,Segoe UI,sans-serif" font-size="11" fill="#0b0b0b" text-anchor="middle" font-weight="600">+11%</text>
-<text x="24.0" y="310.0" font-family="system-ui,-apple-system,Segoe UI,sans-serif" font-size="10" fill="#898781" text-anchor="start" font-weight="normal">Salted prompts, 1 output token. knapcio&#x27;s prefill speedups (mHC sharding, PF3 kernels) are TP4-only and off at TP2.</text>
+<text x="730.7" y="294.0" font-family="system-ui,-apple-system,Segoe UI,sans-serif" font-size="11" fill="#0b0b0b" text-anchor="middle" font-weight="600">-8%</text>
+<text x="24.0" y="310.0" font-family="system-ui,-apple-system,Segoe UI,sans-serif" font-size="10" fill="#898781" text-anchor="start" font-weight="normal">Salted prompts, 1 output token, 6 GiB KV. knapcio&#x27;s prefill speedups are TP4-only and off at TP2; the 4 GiB pin prefills 13-17% faster.</text>
 </svg>
