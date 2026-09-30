@@ -1,0 +1,29 @@
+== tp2-kv6-laneB-high @ http://127.0.0.1:8001 ==
+  warm-up 18.3s
+  meta: {'num_gpu_blocks': 233, 'block_size': 1152, 'kv_pool_tokens': 268416, 'preemptions_total': 0.0}
+ [single]
+  count100   dec med   92.54 peak   94.35  e2e   84.18  ttft 0.240s  answer@ 0.53s  think 46ch  toks 215  acc 0.8634 len 7.043
+  count300   dec med   87.54 peak   90.41  e2e   85.15  ttft 0.230s  answer@ 0.77s  think 105ch  toks 695  acc 0.85 len 6.95
+  code       dec med   63.82 peak   66.00  e2e   62.43  ttft 0.300s  answer@ 1.26s  think 134ch  toks 700  acc 0.5403 len 4.782
+  json       dec med   70.58 peak   70.80  e2e   68.58  ttft 0.340s  answer@ 0.54s  think 39ch  toks 792  acc 0.5675 len 4.973
+  sql        dec med   59.70 peak   60.03  e2e   57.59  ttft 0.380s  answer@ 1.75s  think 246ch  toks 600  acc 0.4369 len 4.059
+  tooluse    dec med   66.93 peak   69.44  e2e   43.42  ttft 0.450s  answer@ 0.52s  think 24ch  toks 50  acc 0.6378 len 5.464
+  math       dec med   65.48 peak   66.84  e2e   63.36  ttft 0.350s  answer@ 3.86s  think 486ch  toks 600  acc 0.547 len 4.829
+  prose      dec med   35.53 peak   36.95  e2e   35.09  ttft 0.290s  answer@ 2.88s  think 382ch  toks 700  acc 0.1579 len 2.105
+  narrative  dec med   34.62 peak   37.70  e2e   34.25  ttft 0.280s  answer@ 0.99s  think 147ch  toks 741  acc 0.1531 len 2.071
+  summary    dec med   40.74 peak   42.91  e2e   40.15  ttft 0.270s  answer@ 1.29s  think 186ch  toks 700  acc 0.2118 len 2.483
+ [sweep]
+  C1 agg med 63.75 peak 64.92  per-stream 65.58  ttft p90 0.39s  fails 0  preempt 0.0  acc 0.4982
+  C2 agg med 59.44 peak 82.12  per-stream 42.58  ttft p90 0.59s  fails 0  preempt 0.0  acc 0.3831
+  C3 agg med 59.86 peak 86.9  per-stream 29.97  ttft p90 0.84s  fails 0  preempt 0.0  acc 0.2998
+  C4 agg med 87.67 peak 88.68  per-stream 28.85  ttft p90 0.94s  fails 0  preempt 0.0  acc 0.3274
+  C5 agg med 71.92 peak 96.69  per-stream 21.94  ttft p90 0.67s  fails 0  preempt 0.0  acc 0.2617
+  C6 agg med 80.08 peak 81.57  per-stream 18.37  ttft p90 0.92s  fails 0  preempt 0.0  acc 0.2646
+ [prefill]
+  prefill ~  2048: 5944 tok  ttft 5.24s  1135 tok/s
+  prefill ~  8192: 29866 tok  ttft 22.67s  1317 tok/s
+  prefill ~ 32768: 113912 tok  ttft 83.88s  1358 tok/s
+ [longctx]
+  longctx C1: {'agg_tok_s': 2.69, 'per_stream_decode': 41.1, 'ttft_s': 87.01, 'wall_s': 93.1, 'fails': 0}
+  longctx C2: {'agg_tok_s': 2.69, 'per_stream_decode': 22.69, 'ttft_s': 180.05, 'wall_s': 186.2, 'fails': 0}
+  meta: {'num_gpu_blocks': 233, 'block_size': 1152, 'kv_pool_tokens': 268416, 'preemptions_total': 0.0}
