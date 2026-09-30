@@ -3,6 +3,15 @@
 The one configuration this repo ships today. If anything else in the repo disagrees with
 this file, this file wins.
 
+> **2026-09-29: the repo's default is now knapcio's stack, ported to TP2**
+> ([`runs/2026-09-29-knapcio-tp2/RUNBOOK.md`](runs/2026-09-29-knapcio-tp2/RUNBOOK.md), README top section). This file
+> describes the **previous recipe**, which stays valid and is the fallback when the bigger KV pool matters
+> (714,240 vs 372,773 tokens).
+>
+> Launcher hashes below refreshed 2026-09-29: the 2026-09-24 checkpoint-guard commit (`abb38bb`, #23) changed all
+> three launchers (nvidia default, `tools/checkpoint_guard.py`) without updating them, which had left the `guard`
+> check red on `main`. No launcher content changed in this update.
+
 Last verified: 2026-09-02 (numbers). Launcher updated 2026-09-18 (speed night, [docs/SPEED-NIGHT-2026-09-18.md](docs/SPEED-NIGHT-2026-09-18.md)) — healthy-fleet before/after in §4 of that doc: prefill +26–36%, aggregate +8–19% at C2–C4/C6, single-stream decode unchanged.
 
 ---
@@ -220,6 +229,8 @@ Still current: `docs/TP2-SPEC-DEPTH-AND-KV-2026-09-02.md`,
 <!-- launcher hashes, maintained by tools/check-current.sh --write -->
 
 <!-- launcher hashes, maintained by tools/check-current.sh --write -->
-sha256 e75b98d6c4770e2558d87990126eaae6bf36e9948c6be4cdc67eb015024ba591  launch-glm53-vllm-tp2-dflash2.sh
-sha256 9e0ca234ece25786c9109fe9b3121e0ba024b32a741fb9cd7feb6861a6f76df6  launch-glm53-vllm-tp2.sh
-sha256 5d1fedd3b586819668d8f6f6759d2483fbd785aadad2a25139cbf90639c27929  launch-glm53-vllm-tp4.sh
+
+<!-- launcher hashes, maintained by tools/check-current.sh --write -->
+sha256 7129a7ad0cc8578e2af0446ceb217be61fd48def4a7236918718220cb44dc598  launch-glm53-vllm-tp2-dflash2.sh
+sha256 6d6e4489dca9a1b53bb533be5d29df69b1d11eb322d2b4cac7f0cd7663610858  launch-glm53-vllm-tp2.sh
+sha256 912f7c6f9ce8c7bd035d0cc6d25c22a32117fcdd329bcc1157bf612eef2b579a  launch-glm53-vllm-tp4.sh
