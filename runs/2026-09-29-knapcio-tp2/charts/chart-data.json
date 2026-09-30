@@ -1,0 +1,121 @@
+{
+ "tp2prompt": {
+  "kind": "prefill",
+  "title": "GLM-5.3-Flash, 2x DGX Spark TP2: decode speed by prompt type (tok/s, single stream)",
+  "cats": [
+   "count100*",
+   "count300*",
+   "tool call",
+   "math",
+   "code",
+   "json",
+   "sql",
+   "summary",
+   "prose",
+   "narrative"
+  ],
+  "new_label": "knapcio stack (TP2 port)",
+  "old_label": "previous TP2 recipe",
+  "new": [
+   96.4,
+   92.9,
+   100.3,
+   64.6,
+   71.0,
+   71.3,
+   61.7,
+   42.1,
+   35.6,
+   35.4
+  ],
+  "old": [
+   61.3,
+   57.6,
+   47.7,
+   46.2,
+   44.7,
+   42.8,
+   39.6,
+   20.9,
+   18.1,
+   17.9
+  ],
+  "delta": [
+   "+57%",
+   "+61%",
+   "+110%",
+   "+40%",
+   "+59%",
+   "+67%",
+   "+56%",
+   "+101%",
+   "+97%",
+   "+98%"
+  ],
+  "note": "Same fleet, harness and nvidia weights; previous recipe measured 2026-09-18, knapcio 2026-09-29. Temp 0, low effort, median of 3. * counting = ceiling."
+ },
+ "tp2sweep": {
+  "kind": "sweep",
+  "title": "Aggregate throughput, mixed real prompts, TP2 (tok/s, peak of 3 rounds)",
+  "x": [
+   "C1",
+   "C2",
+   "C3",
+   "C4",
+   "C5",
+   "C6"
+  ],
+  "series": [
+   [
+    "knapcio stack (TP2 port)",
+    [
+     70.0,
+     83.5,
+     91.8,
+     91.5,
+     97.2,
+     77.8
+    ]
+   ],
+   [
+    "previous TP2 recipe",
+    [
+     46.1,
+     52.0,
+     57.7,
+     60.5,
+     66.3,
+     65.8
+    ]
+   ]
+  ],
+  "note": "8 prompt types rotated across streams (no counting). Previous recipe 2026-09-18, knapcio 2026-09-29, same harness."
+ },
+ "tp2prefill": {
+  "kind": "prefill",
+  "title": "Cold prefill, TP2 (tok/s)",
+  "cats": [
+   "5,944-token prompt",
+   "29,868-token prompt",
+   "113,911-token prompt"
+  ],
+  "new_label": "knapcio stack (TP2 port)",
+  "old_label": "previous TP2 recipe",
+  "new": [
+   1288,
+   1455,
+   1479
+  ],
+  "old": [
+   1506,
+   1242,
+   1336
+  ],
+  "note": "Salted prompts, 1 output token. knapcio's prefill speedups (mHC sharding, PF3 kernels) are TP4-only and off at TP2.",
+  "delta": [
+   "-14%",
+   "+17%",
+   "+11%"
+  ]
+ }
+}

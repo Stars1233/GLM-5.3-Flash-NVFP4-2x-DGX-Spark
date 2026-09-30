@@ -1,10 +1,32 @@
 # GLM-5.3-Flash NVFP4 + DFlash2 on 2x NVIDIA DGX Spark
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="runs/2026-09-29-knapcio-tp2/charts/tp2prompt-dark.svg">
+  <img alt="Single-stream decode by prompt type on 2x DGX Spark TP2, previous recipe vs knapcio stack: count to 100 61 to 96, count to 300 58 to 93, tool call 48 to 100, math 46 to 65, code 45 to 71, json 43 to 71, sql 40 to 62, summary 21 to 42, prose 18 to 36, narrative 18 to 35 tok/s." src="runs/2026-09-29-knapcio-tp2/charts/tp2prompt-light.svg" width="880">
+</picture>
+
+**Single-stream decode, tok/s** (median of 3). Same fleet, same harness, same nvidia weights. Count to 100 is the peak.
+
+| prompt | previous TP2 recipe | **knapcio stack, lane A (thinking low)** | change | lane B (thinking high) |
+|---|---|---|---|---|
+| count to 100 (peak) ¹ | 61.3 | **96.4** | +57% | 93.1 |
+| count to 300 ¹ | 57.6 | **92.9** | +61% | 92.2 |
+| tool call | 47.7 | **100.3** | +111% | 67.7 |
+| math | 46.2 | **64.6** | +40% | 68.5 |
+| code | 44.7 | **71.0** | +59% | 65.4 |
+| json | 42.8 | **71.3** | +67% | 71.3 |
+| sql | 39.6 | **61.7** | +56% | 59.6 |
+| summary | 20.9 | **42.1** | +102% | 42.2 |
+| prose | 18.1 | **35.6** | +97% | 36.0 |
+| narrative | 17.9 | **35.4** | +98% | 35.5 |
+
+¹ The counting prompts are the speculative-decoding ceiling, not a typical rate. Previous recipe measured 2026-09-18 on the healthy fleet, knapcio 2026-09-29.
+
 [zai-org/GLM-5.3-Flash](https://huggingface.co/zai-org/GLM-5.3-Flash) (320B total / 18B active MoE) served by vLLM at **tensor-parallel 2 across two DGX Spark** (GB10/SM121), **262,144-token context**, fp8 KV, DFlash2 speculative drafter.
 
-**Current recipe: [CURRENT.md](CURRENT.md).** Read that first, it is the one configuration this repo ships, and it wins over anything below that disagrees.
+**Current default (2026-09-29): [knapcio's stack](https://github.com/knapcio/GLM-5.3-Flash-4x-DGX-Spark-TP4), ported to two Sparks.** Decode is 1.4x to 2.1x faster on every prompt type than our previous recipe, C1 to C6 aggregate +18% to +61%, weights load in 44 s. Runbook and configs: [`runs/2026-09-29-knapcio-tp2/`](runs/2026-09-29-knapcio-tp2/).
 
-One launcher: [`launch-glm53-vllm-tp2-dflash2.sh`](launch-glm53-vllm-tp2-dflash2.sh), **worker Spark4 (rank 1) FIRST, then head Reddie (rank 0)**, which serves :8000.
+**Previous recipe: [CURRENT.md](CURRENT.md)**, one launcher, [`launch-glm53-vllm-tp2-dflash2.sh`](launch-glm53-vllm-tp2-dflash2.sh) (worker Spark4 rank 1 first, then head Reddie rank 0, serving :8000). Still valid, and the fallback when you need its bigger KV pool (714K vs 373K tokens).
 
 Weights: [nvidia/GLM-5.3-Flash-NVFP4](https://huggingface.co/nvidia/GLM-5.3-Flash-NVFP4) at `/var/tmp/models/GLM-5.3-Flash-NVFP4-nvidia` for the DFlash2 launcher (RedHatAI at `/var/tmp/models/GLM-5.3-Flash-NVFP4-redhat` for MTP or when memory is tight). ModelOpt builds that quantize attention, including the abliterated ones, corrupt tokens on this stack and the launchers refuse them.
 
@@ -12,7 +34,98 @@ Everything else here is reference: the bring-up log, the day-0 bug receipts, the
 
 ---
 
-## ⭐ Checkpoint: `nvidia/GLM-5.3-Flash-NVFP4` is the DFlash2 default (2026-09-24, issue #23)
+## ⭐ Current default (2026-09-29): knapcio's stack, ported to TP2
+
+The speed stack is **[knapcio/GLM-5.3-Flash-4x-DGX-Spark-TP4](https://github.com/knapcio/GLM-5.3-Flash-4x-DGX-Spark-TP4)** by
+[@knapcio](https://github.com/knapcio) (MIT), pinned at `770d115`. He ships it for **four** Sparks only; this repo ports it
+to two: a four-line change to his launcher, two lane configs, and TP2 memory sizing. His stack is built on this repo
+family's v11 image, RoCE all-reduce port and DFlash2 prefix-cache repair, and its largest single win (8-bit dense
+layers) starts from our finding that the nvidia checkpoint leaves 18 GiB in BF16. The TP4 sibling runs it unmodified:
+[GLM-5.3-Flash-NVFP4-1M-KV-4x-DGX-Spark](https://github.com/tonyd2wild/GLM-5.3-Flash-NVFP4-1M-KV-4x-DGX-Spark).
+
+**Runbook (what the port changes and why), launcher, lane configs, harness and raw results: [`runs/2026-09-29-knapcio-tp2/`](runs/2026-09-29-knapcio-tp2/).**
+
+| lane | nodes | port | default reasoning effort | KV pool | boot to `/health` |
+|---|---|---|---|---|---|
+| **A** | Reddie (head) + Spark4 | `:8000` | **low** | 372,773 tokens (4 GiB/rank) | 140 to 150 s |
+| **B** | Bluey (head) + Asusi | `:8001` | high | 372,773 tokens (4 GiB/rank) | 180 to 190 s |
+
+Both lanes serve `glm-5.3-flash` and run identical code; only the server's default `reasoning_effort` differs, and a
+request can override it. Weights load in **44 s** (knapcio's fast loader); the previous recipe took about 11 minutes.
+
+### C1 to C6, mixed real prompts
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="runs/2026-09-29-knapcio-tp2/charts/tp2sweep-dark.svg">
+  <img alt="Aggregate throughput C1 to C6 on TP2, peak of 3 rounds: previous recipe 46 / 52 / 58 / 60 / 66 / 66, knapcio lane A 70 / 84 / 92 / 92 / 97 / 78 tok/s." src="runs/2026-09-29-knapcio-tp2/charts/tp2sweep-light.svg" width="880">
+</picture>
+
+| streams | previous TP2 recipe | **knapcio lane A (low)** | change (peak) | knapcio lane B (high) | TTFT p90, lane A |
+|---|---|---|---|---|---|
+| C1 | 42.7 / 46.1 | 67.0 / **70.0** | +52% | 62.6 / 68.7 | 0.44 s |
+| C2 | 33.8 / 52.0 | 60.2 / **83.5** | +61% | 58.4 / 80.5 | 0.84 s |
+| C3 | 35.9 / 57.7 | 58.5 / **91.8** | +59% | 60.9 / 90.0 | 0.86 s |
+| C4 | 59.0 / 60.5 | 91.4 / **91.5** | +51% | 90.8 / 92.0 | 0.88 s |
+| C5 | 40.9 / 66.3 | 70.8 / **97.2** | +47% | 71.6 / 99.7 | 2.23 s |
+| C6 | 51.6 / 65.8 | 74.8 / **77.8** | +18% | 74.5 / 75.8 | 27.37 s |
+
+Aggregate tok/s, median / peak of 3 rounds; 8 prompt types rotated across streams, no counting. Zero failures, zero
+preemptions. **Unexplained:** at C6 the TTFT p90 reached 27 to 29 s on both lanes (every other level stayed under 3 s).
+
+### Cold prefill and long context
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="runs/2026-09-29-knapcio-tp2/charts/tp2prefill-dark.svg">
+  <img alt="Cold prefill on TP2: previous recipe 1506 / 1242 / 1336, knapcio lane A 1288 / 1455 / 1479 tok/s at 5,944 / 29,868 / 113,911-token prompts." src="runs/2026-09-29-knapcio-tp2/charts/tp2prefill-light.svg" width="880">
+</picture>
+
+| | previous TP2 recipe | **knapcio lane A** | change |
+|---|---|---|---|
+| 5,943-token prompt | 1,506 tok/s (TTFT 3.9 s) | **1,288 tok/s** (TTFT 4.6 s) | -14% |
+| 29,868-token prompt | 1,242 tok/s (TTFT 24.1 s) | **1,455 tok/s** (TTFT 20.5 s) | +17% |
+| 113,911-token prompt | 1,336 tok/s (TTFT 85.3 s) | **1,479 tok/s** (TTFT 77.0 s) | +11% |
+| 114K-token prompts, 1 at once: decode per stream | 19.1 tok/s | **40.7 tok/s** | +113% |
+| 114K-token prompts, 2 at once: decode per stream | 9.2 tok/s | **22.0 tok/s** | +139% |
+
+Prefill barely moves at TP2: knapcio's prefill speedups (mHC prefill sharding, routed-MoE prefill kernels) are
+built for four ranks and are switched off in the port. Long-context rows are single runs.
+
+### Thinking low vs high (lane A vs lane B)
+
+| prompt | decode, low | decode, high | first answer token, low | first answer token, high | thinking text, low | thinking text, high |
+|---|---|---|---|---|---|---|
+| count to 100 | 96.4 | 93.1 | 0.43 s | 0.57 s | 27 chars | 60 chars |
+| count to 300 | 92.9 | 92.2 | 0.47 s | 0.71 s | 27 chars | 105 chars |
+| tool call | 100.3 | 67.7 | 0.51 s | 0.55 s | 0 chars | 24 chars |
+| math | 64.6 | 68.5 | 2.13 s | 3.73 s | 228 chars | 448 chars |
+| code | 71.0 | 65.4 | 0.37 s | 1.15 s | 0 chars | 145 chars |
+| json | 71.3 | 71.3 | 0.39 s | 0.52 s | 0 chars | 39 chars |
+| sql | 61.7 | 59.6 | 0.40 s | 1.75 s | 0 chars | 246 chars |
+| summary | 42.1 | 42.2 | 0.36 s | 1.21 s | 0 chars | 176 chars |
+| prose | 35.6 | 36.0 | 0.32 s | 2.17 s | 0 chars | 324 chars |
+| narrative | 35.4 | 35.5 | 0.34 s | 0.87 s | 0 chars | 70 chars |
+
+Decode speed is about the same on most prompts. Tool call and code are slower at high because the thinking text accepts
+fewer draft tokens than the answer does (tool call: 5.4 vs 6.8 tokens per step). The bigger difference is the wait:
+high thinks 2 to 10 times longer before it answers, so the first answer token arrives later (up to 3.7 s on math). The TP4 sibling's 69-scenario tool-calling eval scored low 93.5 vs high 92.8, which is
+why low is the fleet default.
+
+### What to know before you switch
+
+- **This is our port, not knapcio's release.** He has not run TP2. Three of his pieces are off because they are built
+  for four ranks (mHC prefill sharding refuses to boot otherwise, the routed-MoE prefill kernels, the prefill gather
+  route); everything on the decode side is on and armed.
+- **Memory is tight.** 87.2 GiB of weights per rank. 4 GiB of KV leaves 3 to 7 GiB free per node. We tried more:
+  8 GiB booted but left 1 to 2 GiB free at idle; **7 GiB booted and then ran out of GPU memory on a 110K-token prompt**
+  (`NV_ERR_NO_MEMORY` on one head, both heads at 0 GiB free; no crash, no reboot). 4 GiB is the setting.
+- **Smaller pool than the previous recipe:** 372,773 tokens vs 714,240. One full 262K request fits, plus short ones.
+- **Censored checkpoint** (`nvidia/GLM-5.3-Flash-NVFP4`, which is also this repo's previous default).
+- **Thinking cannot be switched off** in his chat template (`reasoning_effort` low, high or max).
+- **Single RoCE rail**, same as the TP4 sibling.
+
+---
+
+## Checkpoint: `nvidia/GLM-5.3-Flash-NVFP4` is the DFlash2 default (2026-09-24, issue #23)
 
 ModelOpt NVFP4 builds that quantize attention (`LibertAIDAI/GLM-5.3-Flash-NVFP4` and the abliterated variants) emit **intermittent corrupted token IDs** ([vLLM #54150](https://github.com/vllm-project/vllm/issues/54150)). Nearly invisible in English, but when a corrupted token lands inside a tool-call block the parser desyncs and generation can spiral into a repetition lock. NVIDIA's own build keeps every layer's attention in high precision and is clean.
 
